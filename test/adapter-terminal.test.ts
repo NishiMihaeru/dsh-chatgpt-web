@@ -38,7 +38,7 @@ async function collectFailure(adapter: ChatGptWebAdapter, options: GenerateOptio
   }
 }
 
-test('post-delta transport failure closes the partial text block before throwing', async () => {
+test('post-delta transport failure exposes no unstable browser text before throwing', async () => {
   const transport: ChatTransport = {
     async *generate(req): AsyncIterable<TransportEvent> {
       yield { type: 'state', requestId: req.requestId, stage: 'sent', seq: 0 }
@@ -52,19 +52,18 @@ test('post-delta transport failure closes the partial text block before throwing
   const { adapter } = await makeAdapter(transport)
   const { chunks, error } = await collectFailure(adapter, request())
   assert.equal((error as { code?: unknown }).code, CHATGPT_WEB_CODES.UNCERTAIN)
-  assert.deepEqual(chunks, [
-    { type: 'block-start', index: 0, blockType: 'text' },
-    { type: 'text-delta', index: 0, text: 'partial' },
-    { type: 'block-end', index: 0, block: { type: 'text', text: 'partial' } },
-  ])
+  assert.deepEqual(chunks, [])
 })
 
-test('abort after a delta closes the partial block before aborted finish', async () => {
+test('abort after a browser delta exposes no unstable text before aborted finish', async () => {
   let release: (() => void) | undefined
+  let sawDelta: (() => void) | undefined
+  const deltaSeen = new Promise<void>(resolve => { sawDelta = resolve })
   const transport: ChatTransport = {
     async *generate(req): AsyncIterable<TransportEvent> {
       yield { type: 'state', requestId: req.requestId, stage: 'sent', seq: 0 }
       yield { type: 'delta', requestId: req.requestId, text: 'partial', seq: 1 }
+      sawDelta?.()
       await new Promise<void>(resolve => { release = resolve })
     },
     async abort() { release?.() },
@@ -74,18 +73,14 @@ test('abort after a delta closes the partial block before aborted finish', async
   const controller = new AbortController()
   const chunks: StreamChunk[] = []
   const running = (async () => {
-    for await (const chunk of adapter.stream(request(controller.signal))) {
-      chunks.push(chunk)
-      if (chunk.type === 'text-delta') controller.abort()
-    }
+    for await (const chunk of adapter.stream(request(controller.signal))) chunks.push(chunk)
   })()
+  await deltaSeen
+  controller.abort()
   await running
-  assert.deepEqual(chunks.slice(0, 3), [
-    { type: 'block-start', index: 0, blockType: 'text' },
-    { type: 'text-delta', index: 0, text: 'partial' },
-    { type: 'block-end', index: 0, block: { type: 'text', text: 'partial' } },
-  ])
-  const finish = chunks.at(-1)
+
+  assert.equal(chunks.length, 1)
+  const finish = chunks[0]
   assert.equal(finish?.type, 'finish')
   if (finish?.type === 'finish') assert.equal(finish.reason.kind, 'aborted')
 })
