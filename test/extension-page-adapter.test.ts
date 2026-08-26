@@ -83,7 +83,7 @@ test('thinking status is filtered and append-compatible updates emit only suffix
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
   const observation = adapter.observeGeneration({ baseline: { assistantCount: 0, assistantText: '' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 30, overallTimeoutMs: 2000 })
   const body = window.document.querySelector('.markdown')
-  const turn = window.document.querySelector('[data-message-author-role="assistant"]')
+  const turn = window.document.querySelector('article[data-turn="assistant"], section[data-turn="assistant"]')
   assert.ok(body)
   assert.ok(turn)
   setTimeout(() => { body.textContent = '1' }, 20)
@@ -202,7 +202,7 @@ test('rewritten snapshot is marked non-append and later compatible snapshot resu
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
   const observation = adapter.observeGeneration({ baseline: { assistantCount: 0, assistantText: '' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 40, overallTimeoutMs: 2000 })
   const body = window.document.querySelector('.markdown')
-  const turn = window.document.querySelector('[data-message-author-role="assistant"]')
+  const turn = window.document.querySelector('article[data-turn="assistant"], section[data-turn="assistant"]')
   assert.ok(body)
   assert.ok(turn)
   setTimeout(() => { body.textContent = 'ab' }, 10)
