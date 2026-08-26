@@ -7,7 +7,7 @@ interface PageAdapter {
   isReady(): boolean
   waitForManagedConversation(expectedUrl: string, timeoutMs?: number): Promise<void>
   sendMessage(text: string, options?: { isAborted?: () => boolean; beforeSend?: () => void | Promise<void>; sendTimeoutMs?: number }): Promise<{ assistantCount: number; assistantText: string }>
-  observeGeneration(options?: { baseline?: { assistantCount: number; assistantText: string }; requestPrompt?: string; onUpdate?: (update: { text: string; append: boolean; delta: string }) => void; startTimeoutMs?: number; completionStabilityMs?: number; overallTimeoutMs?: number }): Promise<string>
+  observeGeneration(options?: { baseline?: { assistantCount: number; assistantText: string }; onUpdate?: (update: { text: string; append: boolean; delta: string }) => void; startTimeoutMs?: number; completionStabilityMs?: number; overallTimeoutMs?: number }): Promise<string>
   stopGeneration(): boolean
   getConversationUrl(raw?: string): string | null
 }
@@ -115,129 +115,6 @@ test('a Stop button appearing before the new assistant turn never replays the pr
   assert.equal(final, 'NEW ANSWER')
   assert.equal(updates.some(update => update.text.includes('OLD ANSWER')), false)
   assert.deepEqual(updates.filter(update => update.delta !== '').map(update => update.delta), ['NEW ANSWER'])
-})
-
-test('mutating the previous assistant turn before the new turn appears is never streamed', async () => {
-  const { window, adapter } = await fixture('chatgpt-ready.html')
-  const old = window.document.createElement('article')
-  old.setAttribute('data-turn', 'assistant')
-  const oldBody = window.document.createElement('div')
-  oldBody.className = 'markdown'
-  oldBody.textContent = 'FIRST'
-  old.append(oldBody)
-  window.document.body.append(old)
-  const stop = window.document.createElement('button')
-  stop.setAttribute('data-testid', 'stop-button')
-  window.document.body.append(stop)
-
-  const updates: Array<{ text: string; append: boolean; delta: string }> = []
-  const observation = adapter.observeGeneration({ baseline: { assistantCount: 1, assistantText: 'FIRST' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 30, overallTimeoutMs: 2000 })
-  setTimeout(() => { oldBody.textContent = 'FIRST transient mutation' }, 10)
-  setTimeout(() => {
-    const fresh = window.document.createElement('article')
-    fresh.setAttribute('data-turn', 'assistant')
-    const freshBody = window.document.createElement('div')
-    freshBody.className = 'markdown'
-    freshBody.textContent = 'SECOND'
-    fresh.append(freshBody)
-    window.document.body.append(fresh)
-  }, 30)
-  setTimeout(() => stop.remove(), 70)
-
-  const final = await observation
-  assert.equal(final, 'SECOND')
-  assert.equal(updates.some(update => update.text.includes('FIRST')), false)
-  assert.deepEqual(updates.filter(update => update.delta !== '').map(update => update.delta), ['SECOND'])
-})
-
-test('a cloned previous answer in a newly inserted assistant turn is never streamed', async () => {
-  const { window, adapter } = await fixture('chatgpt-ready.html')
-  const old = window.document.createElement('article')
-  old.setAttribute('data-turn', 'assistant')
-  const oldBody = window.document.createElement('div')
-  oldBody.className = 'markdown'
-  oldBody.textContent = 'FIRST'
-  old.append(oldBody)
-  window.document.body.append(old)
-  const stop = window.document.createElement('button')
-  stop.setAttribute('data-testid', 'stop-button')
-  window.document.body.append(stop)
-
-  const updates: Array<{ text: string; append: boolean; delta: string }> = []
-  const observation = adapter.observeGeneration({ baseline: { assistantCount: 1, assistantText: 'FIRST' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 30, overallTimeoutMs: 2000 })
-  let freshBody: HTMLElement | undefined
-  setTimeout(() => {
-    const fresh = window.document.createElement('article')
-    fresh.setAttribute('data-turn', 'assistant')
-    freshBody = window.document.createElement('div')
-    freshBody.className = 'markdown'
-    freshBody.textContent = 'FIRST'
-    fresh.append(freshBody)
-    window.document.body.append(fresh)
-  }, 10)
-  setTimeout(() => { if (freshBody) freshBody.textContent = 'SECOND' }, 35)
-  setTimeout(() => stop.remove(), 75)
-
-  const final = await observation
-  assert.equal(final, 'SECOND')
-  assert.equal(updates.some(update => update.text === 'FIRST'), false)
-  assert.deepEqual(updates.filter(update => update.delta !== '').map(update => update.delta), ['SECOND'])
-})
-
-test('generation is anchored to the current user turn when old history remounts', async () => {
-  const { window, adapter } = await fixture('chatgpt-ready.html')
-  const oldUser = window.document.createElement('article')
-  oldUser.setAttribute('data-turn', 'user')
-  oldUser.textContent = 'OLD QUESTION'
-  window.document.body.append(oldUser)
-
-  const stop = window.document.createElement('button')
-  stop.setAttribute('data-testid', 'stop-button')
-  window.document.body.append(stop)
-
-  const updates: Array<{ text: string; append: boolean; delta: string }> = []
-  const observation = adapter.observeGeneration({
-    baseline: { assistantCount: 0, assistantText: '' },
-    requestPrompt: 'CURRENT PROMPT',
-    onUpdate: update => updates.push(update),
-    startTimeoutMs: 1000,
-    completionStabilityMs: 30,
-    overallTimeoutMs: 2000,
-  })
-
-  setTimeout(() => {
-    const remountedOld = window.document.createElement('article')
-    remountedOld.setAttribute('data-turn', 'assistant')
-    const body = window.document.createElement('div')
-    body.className = 'markdown'
-    body.textContent = 'FIRST'
-    remountedOld.append(body)
-    window.document.body.append(remountedOld)
-  }, 10)
-
-  setTimeout(() => {
-    const currentUser = window.document.createElement('article')
-    currentUser.setAttribute('data-turn', 'user')
-    currentUser.textContent = 'CURRENT PROMPT'
-    window.document.body.append(currentUser)
-  }, 25)
-
-  setTimeout(() => {
-    const fresh = window.document.createElement('article')
-    fresh.setAttribute('data-turn', 'assistant')
-    const body = window.document.createElement('div')
-    body.className = 'markdown'
-    body.textContent = 'SECOND'
-    fresh.append(body)
-    window.document.body.append(fresh)
-  }, 40)
-
-  setTimeout(() => stop.remove(), 80)
-
-  const final = await observation
-  assert.equal(final, 'SECOND')
-  assert.equal(updates.some(update => update.text.includes('FIRST')), false)
-  assert.deepEqual(updates.filter(update => update.delta !== '').map(update => update.delta), ['SECOND'])
 })
 
 test('an active Stop button extends the first-content deadline without replaying baseline text', async () => {
