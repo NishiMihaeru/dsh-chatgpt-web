@@ -2,22 +2,14 @@
   'use strict'
 
   const TRANSIENT_STATUS = new Set([
-    'thinking',
-    'thinking…',
-    'thinking...',
-    'думаю',
-    'думаю…',
-    'думаю...',
-    'размышляю',
-    'размышляю…',
-    'размышляю...',
+    'thinking', 'thinking…', 'thinking...',
+    'думаю', 'думаю…', 'думаю...',
+    'размышляю', 'размышляю…', 'размышляю...',
   ])
 
   let lastSendBaseline = { assistantCount: 0, assistantText: '' }
 
-  function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms))
-  }
+  function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
 
   function composer() {
     return document.querySelector('#prompt-textarea')
@@ -26,16 +18,11 @@
       ?? document.querySelector('div[contenteditable="true"]')
   }
 
-  function candidateButtons() {
-    return Array.from(document.querySelectorAll('button'))
-  }
+  function candidateButtons() { return Array.from(document.querySelectorAll('button')) }
 
   function buttonLabel(button) {
-    return [
-      button.getAttribute('aria-label'),
-      button.getAttribute('title'),
-      button.textContent,
-    ].filter(Boolean).join(' ').trim().toLowerCase()
+    return [button.getAttribute('aria-label'), button.getAttribute('title'), button.textContent]
+      .filter(Boolean).join(' ').trim().toLowerCase()
   }
 
   function sendButton() {
@@ -62,17 +49,14 @@
   }
 
   function cleanAssistantText(text) {
-    const normalized = String(text ?? '').replace(/\r\n/g, '\n')
-    const lines = normalized.split('\n')
+    const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n')
     while (lines.length > 0 && TRANSIENT_STATUS.has(lines[0].trim().toLowerCase())) lines.shift()
     const cleaned = lines.join('\n').trim()
-    if (TRANSIENT_STATUS.has(cleaned.toLowerCase())) return ''
-    return cleaned
+    return TRANSIENT_STATUS.has(cleaned.toLowerCase()) ? '' : cleaned
   }
 
   function latestAssistantText() {
-    const turns = assistantTurns()
-    const turn = turns.at(-1)
+    const turn = assistantTurns().at(-1)
     if (!turn) return ''
     const answer = turn.querySelector('[data-message-content]')
       ?? turn.querySelector('.markdown')
@@ -82,9 +66,7 @@
     return cleanAssistantText(answer.innerText || answer.textContent || '')
   }
 
-  function isReady() {
-    return composer() !== null
-  }
+  function isReady() { return composer() !== null }
 
   function setNativeValue(element, value) {
     const prototype = Object.getPrototypeOf(element)
@@ -100,7 +82,6 @@
       element.dispatchEvent(new Event('input', { bubbles: true }))
       return
     }
-
     const selection = globalThis.getSelection?.()
     if (selection && document.createRange) {
       const range = document.createRange()
@@ -108,7 +89,6 @@
       selection.removeAllRanges()
       selection.addRange(range)
     }
-
     let inserted = false
     try {
       inserted = typeof document.execCommand === 'function' && document.execCommand('insertText', false, text)
@@ -139,17 +119,13 @@
     const beforeSend = typeof options.beforeSend === 'function' ? options.beforeSend : async () => {}
     if (isAborted()) throw new Error('generation aborted before Send')
 
-    lastSendBaseline = {
-      assistantCount: assistantTurns().length,
-      assistantText: latestAssistantText(),
-    }
+    lastSendBaseline = { assistantCount: assistantTurns().length, assistantText: latestAssistantText() }
     setComposerText(input, text)
     const button = await waitForSendButton(options.sendTimeoutMs ?? 5000, isAborted)
     if (isAborted()) throw new Error('generation aborted before Send')
 
-    // The caller publishes the conservative "sent" boundary before the click.
-    // If cancellation arrives after that boundary but before the synchronous
-    // click, treating the request as uncertain is safe; the reverse is not.
+    // Publish the conservative boundary before the synchronous click. If this
+    // acknowledgement cannot reach the local bridge, the prompt is not sent.
     await beforeSend()
     if (isAborted()) throw new Error('generation aborted at Send boundary')
     button.click()
@@ -167,6 +143,7 @@
     const overallDeadline = startedAt + overallTimeoutMs
 
     let started = false
+    let responseVisible = false
     let latestRaw = ''
     let accepted = ''
     let lastChangeAt = Date.now()
@@ -175,16 +152,11 @@
     return await new Promise((resolve, reject) => {
       let interval
       let observer
-
       const cleanup = () => {
         if (interval !== undefined) clearInterval(interval)
         observer?.disconnect()
       }
-
-      const fail = error => {
-        cleanup()
-        reject(error)
-      }
+      const fail = error => { cleanup(); reject(error) }
 
       const inspect = () => {
         scheduled = false
@@ -197,15 +169,27 @@
         const count = assistantTurns().length
         const text = latestAssistantText()
         const stopping = stopButton() !== null
-        if (!started && (stopping || count > baseline.assistantCount || (text !== '' && text !== baseline.assistantText))) {
+        const changedFromBaseline = count > baseline.assistantCount || (text !== '' && text !== baseline.assistantText)
+
+        if (!started && (stopping || changedFromBaseline)) {
           started = true
+          lastChangeAt = now
+        }
+        if (!started) {
+          if (now >= startDeadline) fail(new Error('ChatGPT generation did not start'))
+          return
+        }
+
+        // A Stop button can appear before ChatGPT inserts the new assistant
+        // turn. Do not mistake the previous turn's text for the new response.
+        if (!responseVisible && changedFromBaseline) {
+          responseVisible = true
           latestRaw = ''
           accepted = ''
           lastChangeAt = now
         }
-
-        if (!started) {
-          if (now >= startDeadline) fail(new Error('ChatGPT generation did not start'))
+        if (!responseVisible) {
+          if (now >= startDeadline) fail(new Error('ChatGPT generation started but no new assistant response appeared'))
           return
         }
 
@@ -232,7 +216,6 @@
         scheduled = true
         queueMicrotask(inspect)
       }
-
       observer = new MutationObserver(scheduleInspect)
       observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true })
       interval = setInterval(inspect, 100)
@@ -249,22 +232,13 @@
 
   function getConversationUrl(raw = location.href) {
     let url
-    try {
-      url = new URL(raw, location.href)
-    } catch {
-      return null
-    }
+    try { url = new URL(raw, location.href) } catch { return null }
     if (url.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.port !== '') return null
     const match = /^\/c\/([^/]+)\/?$/.exec(url.pathname)
-    if (!match?.[1]) return null
-    return `https://chatgpt.com/c/${match[1]}`
+    return match?.[1] ? `https://chatgpt.com/c/${match[1]}` : null
   }
 
   globalThis.__DSH_CHATGPT_PAGE_ADAPTER__ = Object.freeze({
-    isReady,
-    sendMessage,
-    observeGeneration,
-    stopGeneration,
-    getConversationUrl,
+    isReady, sendMessage, observeGeneration, stopGeneration, getConversationUrl,
   })
 })()

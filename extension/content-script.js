@@ -11,29 +11,34 @@
   }
 
   function emit(payload) {
-    const operation = emitChain.then(() => chrome.runtime.sendMessage({ kind: 'dsh-event', payload }))
-    emitChain = operation.catch(() => {})
+    const operation = emitChain.then(async () => {
+      try {
+        const response = await chrome.runtime.sendMessage({ kind: 'dsh-event', payload })
+        return response?.forwarded === true
+      } catch {
+        return false
+      }
+    })
+    emitChain = operation.then(() => undefined, () => undefined)
     return operation
   }
 
   async function runGeneration(message) {
-    const run = {
-      requestId: message.requestId,
-      seq: message.startSeq ?? 0,
-      afterSend: false,
-      aborted: false,
-    }
+    const run = { requestId: message.requestId, seq: message.startSeq ?? 0, afterSend: false, aborted: false }
     activeRun = run
     let urlReported = false
+    let urlReporting = false
     let urlTimer
     const nextSeq = () => run.seq++
 
     const reportUrl = async () => {
-      if (run.aborted || urlReported || activeRun !== run) return
+      if (run.aborted || urlReported || urlReporting || activeRun !== run) return
       const url = page().getConversationUrl()
       if (!url) return
-      urlReported = true
-      await emit({ type: 'session-ready', requestId: run.requestId, conversationUrl: url, seq: nextSeq() })
+      urlReporting = true
+      const forwarded = await emit({ type: 'session-ready', requestId: run.requestId, conversationUrl: url, seq: nextSeq() })
+      urlReporting = false
+      if (forwarded) urlReported = true
     }
 
     try {
@@ -43,22 +48,21 @@
         beforeSend: async () => {
           if (run.aborted || activeRun !== run) throw new Error('generation aborted before Send')
           run.afterSend = true
-          await emit({ type: 'request-state', requestId: run.requestId, stage: 'sent', seq: nextSeq() })
+          const forwarded = await emit({ type: 'request-state', requestId: run.requestId, stage: 'sent', seq: nextSeq() })
+          if (!forwarded) throw new Error('local bridge disconnected before Send')
         },
       })
       if (run.aborted || activeRun !== run) return
       await reportUrl()
       urlTimer = setInterval(() => { void reportUrl() }, 100)
-      await emit({ type: 'request-state', requestId: run.requestId, stage: 'generating', seq: nextSeq() })
+      void emit({ type: 'request-state', requestId: run.requestId, stage: 'generating', seq: nextSeq() })
 
       const finalText = await page().observeGeneration({
         baseline,
         onUpdate(update) {
           if (run.aborted || activeRun !== run) return
           void reportUrl()
-          if (update.append && update.delta) {
-            void emit({ type: 'delta', requestId: run.requestId, text: update.delta, seq: nextSeq() })
-          }
+          if (update.append && update.delta) void emit({ type: 'delta', requestId: run.requestId, text: update.delta, seq: nextSeq() })
         },
       })
 
@@ -69,12 +73,9 @@
     } catch (error) {
       if (!run.aborted && activeRun === run) {
         await emit({
-          type: 'error',
-          requestId: run.requestId,
-          code: 'CHATGPT_PAGE',
+          type: 'error', requestId: run.requestId, code: 'CHATGPT_PAGE',
           message: error instanceof Error ? error.message : String(error),
-          afterSend: run.afterSend,
-          seq: nextSeq(),
+          afterSend: run.afterSend, seq: nextSeq(),
         })
       }
     } finally {

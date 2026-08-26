@@ -3,7 +3,6 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { WebSocket, WebSocketServer } from 'ws'
 import {
-  PROTOCOL,
   parseExtensionMessage,
   wireAbortMessage,
   wireGenerateMessage,
@@ -258,7 +257,10 @@ export class BridgeServer {
 
         switch (message.type) {
           case 'request-state':
-            if (message.stage === 'sent' || message.stage === 'generating') pending.afterSend = true
+            // Once the browser reports `ready`, it may cross Send before a later
+            // state reaches the bridge. A disconnect from this point is treated
+            // conservatively as uncertain rather than retry-safe.
+            if (message.stage === 'ready' || message.stage === 'sent' || message.stage === 'generating') pending.afterSend = true
             pending.stream.push({ type: 'state', requestId: message.requestId, stage: message.stage, seq: message.seq })
             break
           case 'session-ready':

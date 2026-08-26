@@ -5,18 +5,8 @@ import { Window } from 'happy-dom'
 
 interface PageAdapter {
   isReady(): boolean
-  sendMessage(text: string, options?: {
-    isAborted?: () => boolean
-    beforeSend?: () => void | Promise<void>
-    sendTimeoutMs?: number
-  }): Promise<{ assistantCount: number; assistantText: string }>
-  observeGeneration(options?: {
-    baseline?: { assistantCount: number; assistantText: string }
-    onUpdate?: (update: { text: string; append: boolean; delta: string }) => void
-    startTimeoutMs?: number
-    completionStabilityMs?: number
-    overallTimeoutMs?: number
-  }): Promise<string>
+  sendMessage(text: string, options?: { isAborted?: () => boolean; beforeSend?: () => void | Promise<void>; sendTimeoutMs?: number }): Promise<{ assistantCount: number; assistantText: string }>
+  observeGeneration(options?: { baseline?: { assistantCount: number; assistantText: string }; onUpdate?: (update: { text: string; append: boolean; delta: string }) => void; startTimeoutMs?: number; completionStabilityMs?: number; overallTimeoutMs?: number }): Promise<string>
   stopGeneration(): boolean
   getConversationUrl(raw?: string): string | null
 }
@@ -66,13 +56,7 @@ test('sendMessage never clicks Send after cancellation while waiting', async () 
 test('thinking status is filtered and append-compatible updates emit only suffix', async () => {
   const { window, adapter } = await fixture('chatgpt-thinking.html')
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
-  const observation = adapter.observeGeneration({
-    baseline: { assistantCount: 0, assistantText: '' },
-    onUpdate: update => updates.push(update),
-    startTimeoutMs: 1000,
-    completionStabilityMs: 30,
-    overallTimeoutMs: 2000,
-  })
+  const observation = adapter.observeGeneration({ baseline: { assistantCount: 0, assistantText: '' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 30, overallTimeoutMs: 2000 })
   const body = window.document.querySelector('.markdown')
   assert.ok(body)
   setTimeout(() => { body.textContent = '1' }, 20)
@@ -83,16 +67,41 @@ test('thinking status is filtered and append-compatible updates emit only suffix
   assert.equal(updates.some(update => /Думаю/i.test(update.text)), false)
 })
 
+test('a Stop button appearing before the new assistant turn never replays the previous answer', async () => {
+  const { window, adapter } = await fixture('chatgpt-ready.html')
+  const old = window.document.createElement('article')
+  old.setAttribute('data-turn', 'assistant')
+  const oldBody = window.document.createElement('div')
+  oldBody.className = 'markdown'
+  oldBody.textContent = 'OLD ANSWER'
+  old.append(oldBody)
+  window.document.body.append(old)
+  const stop = window.document.createElement('button')
+  stop.setAttribute('data-testid', 'stop-button')
+  window.document.body.append(stop)
+
+  const updates: Array<{ text: string; append: boolean; delta: string }> = []
+  const observation = adapter.observeGeneration({ baseline: { assistantCount: 1, assistantText: 'OLD ANSWER' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 30, overallTimeoutMs: 2000 })
+  setTimeout(() => {
+    const fresh = window.document.createElement('article')
+    fresh.setAttribute('data-turn', 'assistant')
+    const freshBody = window.document.createElement('div')
+    freshBody.className = 'markdown'
+    freshBody.textContent = 'NEW ANSWER'
+    fresh.append(freshBody)
+    window.document.body.append(fresh)
+  }, 20)
+  setTimeout(() => stop.remove(), 50)
+  const final = await observation
+  assert.equal(final, 'NEW ANSWER')
+  assert.equal(updates.some(update => update.text.includes('OLD ANSWER')), false)
+  assert.deepEqual(updates.filter(update => update.delta !== '').map(update => update.delta), ['NEW ANSWER'])
+})
+
 test('rewritten snapshot is marked non-append and later compatible snapshot resumes', async () => {
   const { window, adapter } = await fixture('chatgpt-thinking.html')
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
-  const observation = adapter.observeGeneration({
-    baseline: { assistantCount: 0, assistantText: '' },
-    onUpdate: update => updates.push(update),
-    startTimeoutMs: 1000,
-    completionStabilityMs: 40,
-    overallTimeoutMs: 2000,
-  })
+  const observation = adapter.observeGeneration({ baseline: { assistantCount: 0, assistantText: '' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 40, overallTimeoutMs: 2000 })
   const body = window.document.querySelector('.markdown')
   assert.ok(body)
   setTimeout(() => { body.textContent = 'ab' }, 10)

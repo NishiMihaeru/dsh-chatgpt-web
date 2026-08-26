@@ -32,6 +32,14 @@ export interface ChatGptWebAdapterOptions {
   queue: RequestQueue
 }
 
+const MODEL_INFO: LlmResolvedModelInfo = Object.freeze({
+  provider: CHATGPT_WEB_PROVIDER,
+  id: CHATGPT_WEB_MODEL,
+  name: 'ChatGPT Web (Auto)',
+  description: 'Uses the model selected/defaulted by the authenticated ChatGPT Web UI',
+  inputModalities: Object.freeze(['text'] as const),
+})
+
 const ABORTED = Symbol('aborted')
 
 function validateRoute(provider: string, model?: string): void {
@@ -99,6 +107,11 @@ async function nextEvent(
   })
 }
 
+function closeIteratorInBackground(iterator: AsyncIterator<TransportEvent>): void {
+  const closing = iterator.return?.()
+  if (closing !== undefined) void Promise.resolve(closing).catch(() => {})
+}
+
 export class ChatGptWebAdapter extends LlmAdapter {
   private readonly transport: ChatTransport
   private readonly sessions: SessionManager
@@ -116,27 +129,15 @@ export class ChatGptWebAdapter extends LlmAdapter {
     return { id: CHATGPT_WEB_PROVIDER, name: 'ChatGPT Web' }
   }
 
-  override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+  override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     validateRoute(provider)
-    return Promise.resolve([{
-      provider: CHATGPT_WEB_PROVIDER,
-      id: CHATGPT_WEB_MODEL,
-      name: 'ChatGPT Web (Auto)',
-      description: 'Uses the model selected/defaulted by the authenticated ChatGPT Web UI',
-      inputModalities: ['text'],
-    }])
+    return [MODEL_INFO]
   }
 
-  override resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+  override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     validateRoute(provider, model)
-    if (signal?.aborted === true) return Promise.reject(signal.reason ?? new Error('aborted'))
-    return Promise.resolve({
-      provider: CHATGPT_WEB_PROVIDER,
-      id: CHATGPT_WEB_MODEL,
-      name: 'ChatGPT Web (Auto)',
-      description: 'Uses the model selected/defaulted by the authenticated ChatGPT Web UI',
-      inputModalities: ['text'],
-    })
+    if (signal?.aborted === true) throw signal.reason ?? new Error('aborted')
+    return MODEL_INFO
   }
 
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -144,7 +145,7 @@ export class ChatGptWebAdapter extends LlmAdapter {
     const sessionId = String(options.sessionId)
     const release = await this.queue.acquire(options.signal)
     const requestId = `req_${randomUUID()}`
-    let afterSend = false
+    let uncertainBoundary = false
     let blockStarted = false
     let streamed = ''
     let conversationUrl: string | undefined
@@ -165,8 +166,11 @@ export class ChatGptWebAdapter extends LlmAdapter {
         const next = await nextEvent(iterator, options.signal)
         if (next === ABORTED) {
           await this.transport.abort(requestId)
-          if (afterSend) await this.sessions.markUncertain(sessionId)
-          await iterator.return?.()
+          // Cancellation can win the local race before a browser-side `sent`
+          // state reaches this iterator. Once a browser turn has been dispatched,
+          // preserving an existing provider conversation is therefore unsafe.
+          await this.sessions.markUncertain(sessionId)
+          closeIteratorInBackground(iterator)
           yield abortedFinish()
           return
         }
@@ -175,7 +179,10 @@ export class ChatGptWebAdapter extends LlmAdapter {
         const event = next.value
         switch (event.type) {
           case 'state':
-            if (event.stage === 'sent' || event.stage === 'generating') afterSend = true
+            // `ready` is the conservative uncertainty boundary: immediately
+            // afterwards the extension may cross Send even if the next state is
+            // lost with the WebSocket connection.
+            if (event.stage === 'ready' || event.stage === 'sent' || event.stage === 'generating') uncertainBoundary = true
             break
           case 'session-ready':
             conversationUrl = event.conversationUrl
@@ -223,14 +230,14 @@ export class ChatGptWebAdapter extends LlmAdapter {
             return
           }
           case 'aborted':
-            if (afterSend) await this.sessions.markUncertain(sessionId)
+            await this.sessions.markUncertain(sessionId)
             yield abortedFinish()
             return
           case 'error':
-            if (event.afterSend || afterSend) {
+            if (event.afterSend || uncertainBoundary) {
               await this.sessions.markUncertain(sessionId)
               throw new LlmError(
-                `ChatGPT Web request became uncertain after submission: ${event.message}`,
+                `ChatGPT Web request became uncertain after dispatch: ${event.message}`,
                 CHATGPT_WEB_CODES.UNCERTAIN,
               )
             }
@@ -241,10 +248,10 @@ export class ChatGptWebAdapter extends LlmAdapter {
         }
       }
 
-      if (afterSend) await this.sessions.markUncertain(sessionId)
+      if (uncertainBoundary) await this.sessions.markUncertain(sessionId)
       throw new LlmError(
         'ChatGPT Web bridge ended before generation completed',
-        afterSend ? CHATGPT_WEB_CODES.UNCERTAIN : CHATGPT_WEB_CODES.BRIDGE,
+        uncertainBoundary ? CHATGPT_WEB_CODES.UNCERTAIN : CHATGPT_WEB_CODES.BRIDGE,
       )
     } finally {
       release()
