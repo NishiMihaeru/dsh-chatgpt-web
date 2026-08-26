@@ -5,6 +5,7 @@ import { Window } from 'happy-dom'
 
 interface PageAdapter {
   isReady(): boolean
+  waitForManagedConversation(expectedUrl: string, timeoutMs?: number): Promise<void>
   sendMessage(text: string, options?: { isAborted?: () => boolean; beforeSend?: () => void | Promise<void>; sendTimeoutMs?: number }): Promise<{ assistantCount: number; assistantText: string }>
   observeGeneration(options?: { baseline?: { assistantCount: number; assistantText: string }; onUpdate?: (update: { text: string; append: boolean; delta: string }) => void; startTimeoutMs?: number; completionStabilityMs?: number; overallTimeoutMs?: number }): Promise<string>
   stopGeneration(): boolean
@@ -28,6 +29,23 @@ test('page adapter detects composer and accepts only managed conversation URLs',
   assert.equal(adapter.getConversationUrl(), 'https://chatgpt.com/c/abc')
   assert.equal(adapter.getConversationUrl('https://chatgpt.com/'), null)
   assert.equal(adapter.getConversationUrl('https://example.com/c/abc'), null)
+})
+
+test('managed conversation readiness requires the expected URL and loaded history', async () => {
+  const { window, adapter } = await fixture('chatgpt-ready.html', 'https://chatgpt.com/c/abc')
+  const waiting = adapter.waitForManagedConversation('https://chatgpt.com/c/abc', 250)
+  setTimeout(() => {
+    const turn = window.document.createElement('article')
+    turn.setAttribute('data-turn', 'user')
+    turn.textContent = 'existing managed history'
+    window.document.body.append(turn)
+  }, 20)
+  await waiting
+
+  await assert.rejects(
+    adapter.waitForManagedConversation('https://chatgpt.com/c/different', 30),
+    error => (error as { code?: unknown }).code === 'CHATGPT_CONVERSATION_MISSING',
+  )
 })
 
 test('sendMessage publishes the sent boundary before clicking Send', async () => {
