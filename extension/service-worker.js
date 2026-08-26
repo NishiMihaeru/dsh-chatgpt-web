@@ -82,7 +82,13 @@ async function handleGenerate(message) {
     const tabId = await navigateWorker(message)
     if (activeRequest !== run) return
     if (!sendWire({ type: 'request-state', requestId: run.requestId, stage: 'ready', seq: run.nextSeq++ })) throw new Error('local bridge disconnected before browser dispatch')
-    const response = await chrome.tabs.sendMessage(tabId, { kind: 'dsh-generate', requestId: run.requestId, prompt: message.prompt, startSeq: run.nextSeq })
+    const response = await chrome.tabs.sendMessage(tabId, {
+      kind: 'dsh-generate',
+      requestId: run.requestId,
+      prompt: message.prompt,
+      startSeq: run.nextSeq,
+      ...(message.conversationUrl ? { conversationUrl: message.conversationUrl } : {}),
+    })
     if (!response?.accepted) throw new Error(response?.error ?? 'ChatGPT content script refused generation')
   } catch (error) {
     if (activeRequest === run) {
