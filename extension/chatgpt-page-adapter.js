@@ -189,7 +189,11 @@
           lastChangeAt = now
         }
         if (!responseVisible) {
-          if (now >= startDeadline) fail(new Error('ChatGPT generation started but no new assistant response appeared'))
+          // A live Stop control proves that generation is still in progress.
+          // ChatGPT can spend longer than the normal first-content deadline in
+          // reasoning before it inserts visible assistant text, so keep waiting
+          // while Stop is present and let the overall timeout be the hard cap.
+          if (now >= startDeadline && !stopping) fail(new Error('ChatGPT generation started but no new assistant response appeared'))
           return
         }
 
