@@ -26,6 +26,8 @@ export const CHATGPT_WEB_CODES = Object.freeze({
   BRIDGE: 'CHATGPT_WEB_BRIDGE',
 } as const)
 
+const BROWSER_CONVERSATION_MISSING = 'CHATGPT_CONVERSATION_MISSING'
+
 export interface ChatGptWebAdapterOptions {
   transport: ChatTransport
   sessions: SessionManager
@@ -144,115 +146,137 @@ export class ChatGptWebAdapter extends LlmAdapter {
     assertSupportedRequest(options)
     const sessionId = String(options.sessionId)
     const release = await this.queue.acquire(options.signal)
-    const requestId = `req_${randomUUID()}`
-    let uncertainBoundary = false
-    let blockStarted = false
-    let streamed = ''
-    let conversationUrl: string | undefined
 
     try {
-      const plan = await this.sessions.plan(sessionId, options.system, options.messages)
-      if (plan.kind === 'continue') conversationUrl = plan.conversationUrl
+      let plan = await this.sessions.plan(sessionId, options.system, options.messages)
 
-      const iterable = this.transport.generate({
-        requestId,
-        sessionId,
-        ...(conversationUrl === undefined ? {} : { conversationUrl }),
-        prompt: plan.prompt,
-      }, options.signal)
-      const iterator = iterable[Symbol.asyncIterator]()
+      attemptLoop:
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const requestId = `req_${randomUUID()}`
+        let uncertainBoundary = false
+        let blockStarted = false
+        let streamed = ''
+        let conversationUrl = plan.kind === 'continue' ? plan.conversationUrl : undefined
 
-      while (true) {
-        const next = await nextEvent(iterator, options.signal)
-        if (next === ABORTED) {
-          await this.transport.abort(requestId)
-          // Cancellation can win the local race before a browser-side `sent`
-          // state reaches this iterator. Once a browser turn has been dispatched,
-          // preserving an existing provider conversation is therefore unsafe.
-          await this.sessions.markUncertain(sessionId)
-          closeIteratorInBackground(iterator)
-          yield abortedFinish()
-          return
-        }
-        if (next.done) break
+        const iterable = this.transport.generate({
+          requestId,
+          sessionId,
+          ...(conversationUrl === undefined ? {} : { conversationUrl }),
+          prompt: plan.prompt,
+        }, options.signal)
+        const iterator = iterable[Symbol.asyncIterator]()
 
-        const event = next.value
-        switch (event.type) {
-          case 'state':
-            // `ready` is still pre-Send. Silent disconnects after generate
-            // dispatch are marked uncertain by BridgeServer itself, while an
-            // explicit browser error before `sent` remains retry-safe.
-            if (event.stage === 'sent' || event.stage === 'generating') uncertainBoundary = true
-            break
-          case 'session-ready':
-            conversationUrl = event.conversationUrl
-            break
-          case 'delta':
-            if (event.text.length === 0) break
-            if (!blockStarted) {
-              blockStarted = true
-              yield { type: 'block-start', index: 0, blockType: 'text' }
-            }
-            streamed += event.text
-            yield { type: 'text-delta', index: 0, text: event.text }
-            break
-          case 'complete': {
-            const finalText = event.text
-            if (!finalText.startsWith(streamed)) {
-              await this.sessions.markUncertain(sessionId)
-              throw new LlmError(
-                'ChatGPT Web rewrote already-streamed assistant text; refusing to commit divergent history',
-                CHATGPT_WEB_CODES.STREAM_REWRITE,
-              )
-            }
-            const suffix = finalText.slice(streamed.length)
-            if (suffix.length > 0) {
+        while (true) {
+          const next = await nextEvent(iterator, options.signal)
+          if (next === ABORTED) {
+            await this.transport.abort(requestId)
+            // Cancellation can win the local race before a browser-side `sent`
+            // state reaches this iterator. Once a browser turn has been dispatched,
+            // preserving an existing provider conversation is therefore unsafe.
+            await this.sessions.markUncertain(sessionId)
+            closeIteratorInBackground(iterator)
+            yield abortedFinish()
+            return
+          }
+          if (next.done) break
+
+          const event = next.value
+          switch (event.type) {
+            case 'state':
+              // `ready` is still pre-Send. Silent disconnects after generate
+              // dispatch are marked uncertain by BridgeServer itself, while an
+              // explicit browser error before `sent` remains retry-safe.
+              if (event.stage === 'sent' || event.stage === 'generating') uncertainBoundary = true
+              break
+            case 'session-ready':
+              conversationUrl = event.conversationUrl
+              break
+            case 'delta':
+              if (event.text.length === 0) break
               if (!blockStarted) {
                 blockStarted = true
                 yield { type: 'block-start', index: 0, blockType: 'text' }
               }
-              streamed += suffix
-              yield { type: 'text-delta', index: 0, text: suffix }
-            }
-            if (conversationUrl === undefined) {
-              await this.sessions.markUncertain(sessionId)
-              throw new LlmError(
-                'ChatGPT Web completed a new conversation without reporting its managed URL',
-                CHATGPT_WEB_CODES.CONVERSATION_MISSING,
-              )
-            }
+              streamed += event.text
+              yield { type: 'text-delta', index: 0, text: event.text }
+              break
+            case 'complete': {
+              const finalText = event.text
+              if (!finalText.startsWith(streamed)) {
+                await this.sessions.markUncertain(sessionId)
+                throw new LlmError(
+                  'ChatGPT Web rewrote already-streamed assistant text; refusing to commit divergent history',
+                  CHATGPT_WEB_CODES.STREAM_REWRITE,
+                )
+              }
+              const suffix = finalText.slice(streamed.length)
+              if (suffix.length > 0) {
+                if (!blockStarted) {
+                  blockStarted = true
+                  yield { type: 'block-start', index: 0, blockType: 'text' }
+                }
+                streamed += suffix
+                yield { type: 'text-delta', index: 0, text: suffix }
+              }
+              if (conversationUrl === undefined) {
+                await this.sessions.markUncertain(sessionId)
+                throw new LlmError(
+                  'ChatGPT Web completed a new conversation without reporting its managed URL',
+                  CHATGPT_WEB_CODES.CONVERSATION_MISSING,
+                )
+              }
 
-            await this.sessions.commitSuccess(sessionId, options.system, options.messages, conversationUrl, finalText)
-            if (blockStarted) {
-              yield { type: 'block-end', index: 0, block: { type: 'text', text: finalText } }
+              await this.sessions.commitSuccess(sessionId, options.system, options.messages, conversationUrl, finalText)
+              if (blockStarted) {
+                yield { type: 'block-end', index: 0, block: { type: 'text', text: finalText } }
+              }
+              yield { type: 'finish', reason: { kind: 'stop' } }
+              return
             }
-            yield { type: 'finish', reason: { kind: 'stop' } }
-            return
-          }
-          case 'aborted':
-            await this.sessions.markUncertain(sessionId)
-            yield abortedFinish()
-            return
-          case 'error':
-            if (event.afterSend || uncertainBoundary) {
+            case 'aborted':
               await this.sessions.markUncertain(sessionId)
+              yield abortedFinish()
+              return
+            case 'error':
+              if (
+                event.code === BROWSER_CONVERSATION_MISSING
+                && !event.afterSend
+                && !uncertainBoundary
+                && plan.kind === 'continue'
+                && attempt === 0
+                && !blockStarted
+              ) {
+                // The old managed URL was proven unusable before Send, so a
+                // single automatic retry is idempotent. Drop only the mapping,
+                // rebuild the full prompt from canonical DSH history, and let
+                // the browser create a fresh managed conversation.
+                closeIteratorInBackground(iterator)
+                await this.sessions.reset(sessionId)
+                plan = await this.sessions.plan(sessionId, options.system, options.messages)
+                continue attemptLoop
+              }
+              if (event.afterSend || uncertainBoundary) {
+                await this.sessions.markUncertain(sessionId)
+                throw new LlmError(
+                  `ChatGPT Web request became uncertain after dispatch: ${event.message}`,
+                  CHATGPT_WEB_CODES.UNCERTAIN,
+                )
+              }
               throw new LlmError(
-                `ChatGPT Web request became uncertain after dispatch: ${event.message}`,
-                CHATGPT_WEB_CODES.UNCERTAIN,
+                `ChatGPT Web bridge error (${event.code}): ${event.message}`,
+                CHATGPT_WEB_CODES.BRIDGE,
               )
-            }
-            throw new LlmError(
-              `ChatGPT Web bridge error (${event.code}): ${event.message}`,
-              CHATGPT_WEB_CODES.BRIDGE,
-            )
+          }
         }
+
+        if (uncertainBoundary) await this.sessions.markUncertain(sessionId)
+        throw new LlmError(
+          'ChatGPT Web bridge ended before generation completed',
+          uncertainBoundary ? CHATGPT_WEB_CODES.UNCERTAIN : CHATGPT_WEB_CODES.BRIDGE,
+        )
       }
 
-      if (uncertainBoundary) await this.sessions.markUncertain(sessionId)
-      throw new LlmError(
-        'ChatGPT Web bridge ended before generation completed',
-        uncertainBoundary ? CHATGPT_WEB_CODES.UNCERTAIN : CHATGPT_WEB_CODES.BRIDGE,
-      )
+      throw new LlmError('ChatGPT Web managed-conversation recovery was exhausted', CHATGPT_WEB_CODES.BRIDGE)
     } finally {
       release()
     }
