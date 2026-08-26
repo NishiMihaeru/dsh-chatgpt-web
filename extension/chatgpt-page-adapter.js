@@ -48,10 +48,26 @@
     return Array.from(document.querySelectorAll('[data-message-author-role]'))
   }
 
+  function turnRole(turn) {
+    return turn.getAttribute('data-turn') ?? turn.getAttribute('data-message-author-role') ?? ''
+  }
+
+  function turnContent(turn) {
+    return turn.querySelector('[data-message-content]')
+      ?? turn.querySelector('.whitespace-pre-wrap')
+      ?? turn.querySelector('.markdown')
+      ?? turn.querySelector('.prose')
+      ?? turn.querySelector('[class*="markdown"]')
+      ?? turn
+  }
+
+  function normalizedTurnText(turn) {
+    const content = turnContent(turn)
+    return String(content.innerText || content.textContent || '').replace(/\r\n/g, '\n').trim()
+  }
+
   function assistantTurns() {
-    const articles = Array.from(document.querySelectorAll('article[data-turn="assistant"]'))
-    if (articles.length > 0) return articles
-    return Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'))
+    return conversationTurns().filter(turn => turnRole(turn) === 'assistant')
   }
 
   function cleanAssistantText(text) {
@@ -61,15 +77,34 @@
     return TRANSIENT_STATUS.has(cleaned.toLowerCase()) ? '' : cleaned
   }
 
-  function latestAssistantText() {
-    const turn = assistantTurns().at(-1)
+  function assistantText(turn) {
     if (!turn) return ''
-    const answer = turn.querySelector('[data-message-content]')
-      ?? turn.querySelector('.markdown')
-      ?? turn.querySelector('.prose')
-      ?? turn.querySelector('[class*="markdown"]')
-      ?? turn
+    const answer = turnContent(turn)
     return cleanAssistantText(answer.innerText || answer.textContent || '')
+  }
+
+  function latestAssistantText() {
+    return assistantText(assistantTurns().at(-1))
+  }
+
+  function assistantTurnAfterPrompt(requestPrompt) {
+    const expected = String(requestPrompt ?? '').replace(/\r\n/g, '\n').trim()
+    if (!expected) return null
+    const turns = conversationTurns()
+    let userIndex = -1
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      if (turnRole(turns[index]) === 'user' && normalizedTurnText(turns[index]) === expected) {
+        userIndex = index
+        break
+      }
+    }
+    if (userIndex < 0) return null
+    for (let index = userIndex + 1; index < turns.length; index += 1) {
+      const role = turnRole(turns[index])
+      if (role === 'assistant') return turns[index]
+      if (role === 'user') return null
+    }
+    return null
   }
 
   function isReady() { return composer() !== null }
@@ -167,6 +202,9 @@
 
   async function observeGeneration(options = {}) {
     const baseline = options.baseline ?? lastSendBaseline
+    const requestPrompt = typeof options.requestPrompt === 'string' && options.requestPrompt.trim() !== ''
+      ? options.requestPrompt
+      : null
     const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : () => {}
     const startTimeoutMs = options.startTimeoutMs ?? 30000
     const completionStabilityMs = options.completionStabilityMs ?? 700
@@ -199,10 +237,11 @@
           return
         }
 
+        const anchoredTurn = requestPrompt === null ? null : assistantTurnAfterPrompt(requestPrompt)
         const count = assistantTurns().length
-        const text = latestAssistantText()
+        const text = requestPrompt === null ? latestAssistantText() : assistantText(anchoredTurn)
         const stopping = stopButton() !== null
-        const newAssistantTurn = count > baseline.assistantCount
+        const newAssistantTurn = requestPrompt === null ? count > baseline.assistantCount : anchoredTurn !== null
 
         if (!started && (stopping || newAssistantTurn)) {
           started = true
@@ -234,9 +273,9 @@
           return
         }
 
-        // ChatGPT may mutate controls or even the previous assistant turn while
-        // preparing a continuation. Only a newly inserted assistant turn belongs
-        // to this request and is safe to stream.
+        // With requestPrompt present, the response is anchored to the assistant
+        // turn following this exact submitted user turn. Remounted older history
+        // therefore cannot become the current response merely by appearing last.
         if (!responseVisible && newAssistantTurn) {
           responseVisible = true
           latestRaw = ''
