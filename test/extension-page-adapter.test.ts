@@ -98,6 +98,37 @@ test('a Stop button appearing before the new assistant turn never replays the pr
   assert.deepEqual(updates.filter(update => update.delta !== '').map(update => update.delta), ['NEW ANSWER'])
 })
 
+test('an active Stop button extends the first-content deadline without replaying baseline text', async () => {
+  const { window, adapter } = await fixture('chatgpt-ready.html')
+  const old = window.document.createElement('article')
+  old.setAttribute('data-turn', 'assistant')
+  const oldBody = window.document.createElement('div')
+  oldBody.className = 'markdown'
+  oldBody.textContent = 'OLD ANSWER'
+  old.append(oldBody)
+  window.document.body.append(old)
+  const stop = window.document.createElement('button')
+  stop.setAttribute('data-testid', 'stop-button')
+  window.document.body.append(stop)
+
+  const updates: Array<{ text: string; append: boolean; delta: string }> = []
+  const observation = adapter.observeGeneration({ baseline: { assistantCount: 1, assistantText: 'OLD ANSWER' }, onUpdate: update => updates.push(update), startTimeoutMs: 20, completionStabilityMs: 20, overallTimeoutMs: 1000 })
+  setTimeout(() => {
+    const fresh = window.document.createElement('article')
+    fresh.setAttribute('data-turn', 'assistant')
+    const freshBody = window.document.createElement('div')
+    freshBody.className = 'markdown'
+    freshBody.textContent = 'LATE ANSWER'
+    fresh.append(freshBody)
+    window.document.body.append(fresh)
+  }, 60)
+  setTimeout(() => stop.remove(), 100)
+
+  const final = await observation
+  assert.equal(final, 'LATE ANSWER')
+  assert.equal(updates.some(update => update.text.includes('OLD ANSWER')), false)
+})
+
 test('rewritten snapshot is marked non-append and later compatible snapshot resumes', async () => {
   const { window, adapter } = await fixture('chatgpt-thinking.html')
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
