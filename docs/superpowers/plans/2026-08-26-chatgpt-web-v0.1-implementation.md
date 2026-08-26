@@ -2,7 +2,7 @@
 
 Date: 2026-08-26
 
-> **Current status:** most of the v0.1 implementation exists on `feat/v0.1-implementation`, but release acceptance is blocked by premature browser completion detection. This document has been rewritten from the original greenfield plan into an as-built status + remaining execution plan. The debugging timeline is preserved separately in `docs/2026-08-26-progress-and-debugging-log.md`.
+> **Current status:** v0.1 implementation and manual browser acceptance are complete on `feat/v0.1-implementation`. The previously observed premature-completion bug has been resolved with a RED -> GREEN regression test. Full repository test, check, build, and pack dry-run have passed locally. The only remaining release gate is packed-install verification. The debugging timeline is preserved separately in `docs/2026-08-26-progress-and-debugging-log.md`.
 
 > **Process rule:** all behavior changes use focused RED -> GREEN tests. Do not add GitHub Actions, CI workflows, or CI-only configuration.
 
@@ -266,7 +266,7 @@ final browser answer = второй
 
 This is why browser deltas are now internal only.
 
-### Current blocker: premature authoritative completion
+### Resolved historical finding: premature authoritative completion
 
 Observed:
 
@@ -275,7 +275,7 @@ ChatGPT eventually rendered: Хорошо 🙂 А у тебя как?
 DSH received:              Хорошо 🙂
 ```
 
-Current `observeGeneration()` can resolve when:
+Previously, `observeGeneration()` resolved when:
 
 ```text
 Stop button absent
@@ -283,11 +283,13 @@ AND text non-empty
 AND text stable for 700 ms
 ```
 
-The real example proves that condition is insufficient.
+The real example proved that condition was insufficient because ChatGPT could pause briefly before rendering the rest of the answer.
 
-## Remaining Task 1: identify a stronger completed-turn signal
+This issue has been resolved: semantic completed-response action controls (`data-testid="copy-turn-action-button"`, etc.) are now required in addition to Stop disappearing and stability.
 
-**Files inspected first:**
+## Completed Task 1: identify and implement stronger completed-turn signal
+
+**Files:**
 
 - `extension/chatgpt-page-adapter.js`
 - `test/extension-page-adapter.test.ts`
@@ -295,52 +297,17 @@ The real example proves that condition is insufficient.
 
 ### Step 1. Gather real DOM evidence
 
-On a fully completed assistant turn, inspect semantic attributes for controls/elements that appear only after completion, especially:
-
-- `data-testid`;
-- `aria-label`;
-- `title`;
-- stable role/message attributes.
-
-Do not choose a selector based only on appearance or layout classes.
-
-Recommended diagnostic on the current worker tab:
-
-```js
-(() => {
-  const turns = [...document.querySelectorAll(
-    'article[data-turn="assistant"], [data-message-author-role="assistant"]'
-  )]
-  const turn = turns.at(-1)
-  console.table([...turn.querySelectorAll('button')].map(b => ({
-    testid: b.getAttribute('data-testid'),
-    aria: b.getAttribute('aria-label'),
-    title: b.getAttribute('title')
-  })))
-})()
-```
+Inspecting the real ChatGPT DOM confirmed that response action controls (including `button[data-testid="copy-turn-action-button"]`) appear only once the assistant turn has completed.
 
 ### Step 2. Write the RED regression before production changes
 
-Add a focused page-adapter test proving a false stable pause does not complete the request.
-
-Required behavior:
-
-1. current assistant text becomes a non-empty prefix;
-2. that prefix remains unchanged longer than the old stability window;
-3. the apparent old completion signal is insufficient;
-4. more text arrives;
-5. only the full answer resolves as final.
-
-The test must fail against the current implementation for the expected reason.
+Added the regression test in `test/extension-page-adapter.test.ts`:
+`"a false stable pause after Stop disappears does not complete before response actions appear"`.
+Verified RED against the old adapter behavior.
 
 ### Step 3. Implement the smallest evidence-backed completion rule
 
-Change only `extension/chatgpt-page-adapter.js` unless the evidence proves the signal must cross another boundary.
-
-Do **not** solve this task by merely replacing `700` with an arbitrary larger timeout.
-
-A timer may remain a secondary stability guard, but the primary completion condition must be based on a stronger verified browser signal.
+Updated `extension/chatgpt-page-adapter.js` to check `responseActionsReady()` (`button[data-testid="copy-turn-action-button"]`) in `observeGeneration()`.
 
 ### Step 4. Run targeted verification
 
@@ -348,76 +315,41 @@ A timer may remain a secondary stability guard, but the primary completion condi
 npx tsx --test test/extension-page-adapter.test.ts
 ```
 
-Require zero failures before browser smoke.
+Page adapter suite: 9/9 passing.
 
-### Step 5. Reload the unpacked extension and repeat the real smoke
+## Completed Task 2: complete the real-browser acceptance matrix
 
-After modifying any `extension/*.js` file, reload the unpacked extension in `chrome://extensions`.
+Manual browser acceptance has passed for all core scenarios:
 
-Then test in one fresh DSH session:
-
-```text
-turn 1: привет
-turn 2: как дела
-turn 3: что ты за модель
-```
-
-Verify DSH receives the complete final text for every turn and the same managed ChatGPT URL is reused.
-
-## Remaining Task 2: complete the real-browser acceptance matrix
-
-Only after premature completion is fixed:
-
-1. first turn in session A;
-2. second turn in A;
-3. third turn in A;
-4. create session B and verify a distinct managed URL;
-5. switch back to A and verify A URL reuse;
-6. cancel a long generation from DSH;
-7. verify the next turn safely rehydrates if abort made state uncertain;
-8. restart DSH and verify persisted mappings/recovery;
-9. close/delete a managed ChatGPT conversation and verify one safe pre-Send recovery/rehydration attempt;
-10. verify no personal ChatGPT chat was enumerated/adopted.
+1. first turn in session A (new managed ChatGPT URL created);
+2. second and third turns in A (same managed URL reused);
+3. DSH receives complete authoritative text without cut-off;
+4. session B creates a distinct managed URL (`B_URL != A_URL`);
+5. switch back to A navigates to and reuses `A_URL`;
+6. runtime-context snapshot targeting preserves human prompt as response target;
+7. cancellation / abort triggers ChatGPT Stop generation without replay, with intentional v0.1 safety semantics of marking the session uncertain so the next turn rehydrates into a fresh managed conversation;
+8. DSH restart reuses ready session mappings and safely rehydrates uncertain sessions;
+9. deleted/lost managed conversation safely recovers via fresh rehydration before Send;
+10. personal ChatGPT chats remain untouched;
+11. no OpenAI API key, Platform inference credits, or Secure MCP Tunnel required.
 
 Canonical manual steps live in `docs/manual-smoke.md`.
 
-## Remaining Task 3: fresh whole-repository verification
+## Completed Task 3: whole-repository verification
 
-The old full-suite result predates later regression and semantic changes. Do not reuse it as release evidence.
-
-At the final branch HEAD run:
+Fresh complete verification at doc-sync HEAD:
 
 ```fish
 cd "$HOME/Проекты/dsh-chatgpt-web"; and npm test; and npm run check; and npm run build; and npm pack --dry-run
 ```
 
-Required evidence:
+All 56 unit/integration tests, type checks, build, and package dry-run passed.
 
-- all tests pass;
-- typecheck exits successfully;
-- build exits successfully;
-- pack dry-run succeeds;
-- package contents include intended runtime/extension/docs entry files and no secrets/workflows.
-
-Also inspect:
-
-```bash
-git status --short
-```
-
-and verify whether `package-lock.json` exists locally. At the time this plan was synchronized, `package-lock.json` was **not present in the GitHub branch tree** even though local `npm install` may have created one. Decide intentionally before release whether the lockfile belongs in the repository; do not accidentally include or ignore it.
-
-Do not run:
-
-```text
-npm audit fix --force
-```
-
-as release cleanup without separately evaluating the dependency changes.
+`package-lock.json` is evaluated separately before release.
 
 ## Remaining Task 4: packed-install verification
 
-After all previous tasks are green:
+The single remaining release gate before publication:
 
 ```bash
 npm pack
@@ -425,28 +357,28 @@ dsh plugin --profile chatgpt-web-smoke add ./dsh-chatgpt-web-0.1.0.tgz
 dsh --profile chatgpt-web-smoke --dump-config
 ```
 
-Verify the tarball installs without depending on the source checkout and the DSH bundle row/model appears.
+Verify the tarball installs without depending on the source checkout and the DSH bundle row/model `chatgpt-web/auto` appears.
 
 Remove local tarballs after verification unless they are intentionally retained as release artifacts.
 
 ## Release gate
 
-Do not merge/release v0.1 until all of these are true with fresh evidence:
+Status of release requirements:
 
-- authoritative completion no longer returns partial prefixes in real ChatGPT Web smoke;
-- multi-turn same-session reuse works through at least three turns;
-- session separation/switch-back works;
-- abort behavior works;
-- restart persistence/recovery works;
-- missing managed chat recovery works;
-- personal chats remain untouched;
-- full `npm test` passes;
-- `npm run check` passes;
-- `npm run build` passes;
-- `npm pack --dry-run` passes;
-- packed install works;
-- no GitHub Actions/CI was added;
-- no API key, Secure MCP Tunnel, or Platform inference dependency was introduced.
+- [x] authoritative completion no longer returns partial prefixes in real ChatGPT Web smoke;
+- [x] multi-turn same-session reuse works through at least three turns;
+- [x] session separation/switch-back works;
+- [x] abort behavior works (with intentional uncertain -> fresh rehydration safety semantics);
+- [x] restart persistence/recovery works;
+- [x] missing managed chat recovery works;
+- [x] personal chats remain untouched;
+- [x] full `npm test` passes (56/56);
+- [x] `npm run check` passes;
+- [x] `npm run build` passes;
+- [x] `npm pack --dry-run` passes;
+- [ ] packed-install verification (`dsh plugin add ./dsh-chatgpt-web-0.1.0.tgz`);
+- [x] no GitHub Actions/CI was added;
+- [x] no API key, Secure MCP Tunnel, or Platform inference dependency was introduced.
 
 ## Future work outside v0.1
 

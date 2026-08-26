@@ -6,7 +6,7 @@ Date: 2026-08-26
 
 Approved v0.1 architecture, updated to match the implementation branch and live-browser findings.
 
-**Implementation is still work in progress and must not be released yet.** The principal open blocker is reliable detection of a truly completed ChatGPT assistant response. The current DOM completion heuristic can emit an authoritative completion while ChatGPT is still appending text.
+**Implementation is feature-complete; packed-install verification is the remaining release gate.** The previously identified premature-completion blocker (where completion was emitted while ChatGPT was still rendering) has been resolved by requiring semantic completed-response action controls in `extension/chatgpt-page-adapter.js`. Manual browser acceptance has fully passed.
 
 This repository is a standalone DSH Market-style plugin. `nishi-dsh-suite` may consume it later, but it is not part of the v0.1 runtime boundary.
 
@@ -149,7 +149,7 @@ The unpacked extension is loaded manually in v0.1. Plugin startup logs the exact
 6. No automatic retry may duplicate a turn after the prompt may have been sent.
 7. ChatGPT-specific DOM knowledge remains isolated in `extension/chatgpt-page-adapter.js`.
 8. Browser intermediate DOM snapshots are not canonical DSH model output.
-9. `generation-complete.text` is the intended authoritative assistant text, but completion detection itself must be proven reliable before release.
+9. `generation-complete.text` is the authoritative assistant text, with completion detection verified against semantic response action markers.
 10. The bridge is loopback-only and exact-Origin restricted.
 11. v0.1 is text-only and does not expose DSH tools to ChatGPT.
 12. The project deliberately has no GitHub Actions/CI workflow.
@@ -461,9 +461,9 @@ Selectors prefer semantic IDs, `data-testid`, ARIA labels, and message-role attr
 
 Transient states such as `Thinking`, `Думаю`, and `Размышляю` are filtered from assistant text.
 
-## Current open blocker: premature completion
+## Resolved historical blocker: premature completion
 
-Current `observeGeneration()` considers an answer complete when all are true:
+Originally, `observeGeneration()` considered an answer complete when:
 
 ```text
 Stop control is not detected
@@ -471,7 +471,7 @@ assistant text is non-empty
 assistant text has not changed for completionStabilityMs
 ```
 
-The default stability window is currently 700 ms.
+The default stability window was 700 ms.
 
 A real browser run produced:
 
@@ -480,11 +480,9 @@ ChatGPT eventually rendered: Хорошо 🙂 А у тебя как?
 DSH received:              Хорошо 🙂
 ```
 
-The DSH value was an exact prefix of the eventual browser answer. This localizes the defect to page-adapter completion detection: `generation-complete` was emitted too early.
+The DSH value was an exact prefix of the eventual browser answer because `generation-complete` was emitted prematurely during a false stable pause before completion.
 
-Do not fix this by choosing an arbitrary larger stability timeout. The next fix must first gather a stronger completed-turn DOM signal, add a regression reproducing the false stable pause, verify RED, then minimally strengthen completion detection.
-
-Candidate evidence to inspect includes stable action controls rendered only for a completed assistant turn (`data-testid`, ARIA labels, or other semantic attributes). No specific selector is approved until verified against the real DOM.
+This defect was resolved by requiring semantic completed-response action controls (`data-testid="copy-turn-action-button"`) in addition to Stop disappearance and stability. A regression test (`a false stable pause after Stop disappears does not complete before response actions appear`) was added, verified RED, and brought to GREEN.
 
 ## Bridge security
 

@@ -6,21 +6,23 @@ It is intentionally local and manual because authenticated ChatGPT Web testing d
 
 ## Current release status
 
-**Do not mark v0.1 accepted yet.**
+**Browser acceptance has passed; only packed-install verification remains.**
 
-The main open blocker is premature browser completion detection. A real run has shown ChatGPT eventually rendering:
+The previously observed premature-completion blocker has been resolved: `generation-complete` now requires the appearance of semantic completed-response action controls (such as `data-testid="copy-turn-action-button"`) in addition to the disappearance of the Stop button and the stability interval.
+
+The historical issue where ChatGPT briefly rendered a partial answer:
 
 ```text
 Хорошо 🙂 А у тебя как?
 ```
 
-while DSH received only:
+while DSH received only the prefix:
 
 ```text
 Хорошо 🙂
 ```
 
-This means the extension emitted `generation-complete` too early. If that symptom appears during this smoke, stop and report it; do not treat the prefix as a successful answer.
+was reproduced with a RED regression test and resolved in `extension/chatgpt-page-adapter.js`. The manual browser acceptance matrix below has since passed in full.
 
 ## Environment used for the first acceptance run
 
@@ -291,12 +293,22 @@ Verify the setup requires none of:
 
 The authenticated ordinary ChatGPT Web page is the model transport.
 
-## 17. Final local verification
+## 17. Final local verification and packed-install gate
 
-After all live-browser defects are fixed and the smoke matrix passes, run from the final branch HEAD:
+After all live-browser defects were fixed and the smoke matrix passed, full local verification was performed from HEAD:
 
 ```fish
 cd "$HOME/Проекты/dsh-chatgpt-web"; and npm test; and npm run check; and npm run build; and npm pack --dry-run
+```
+
+All 56 tests, type checks, build, and package dry-run passed.
+
+The final release gate is packed-install verification:
+
+```fish
+npm pack
+dsh plugin --profile chatgpt-web-smoke add ./dsh-chatgpt-web-0.1.0.tgz
+dsh --profile chatgpt-web-smoke --dump-config
 ```
 
 Then inspect:

@@ -15,16 +15,20 @@ No OpenAI API key, OpenAI Platform inference credits, or Secure MCP Tunnel are r
 
 ## Status
 
-**v0.1 is work in progress and is not release-ready yet.**
+**v0.1 is work in progress until final release gates are complete.**
 
-The core DSH -> bridge -> Chrome extension -> managed ChatGPT conversation path works, including multi-turn conversation reuse. The current live blocker is browser completion detection: ChatGPT can briefly expose a stable partial answer after the Stop control disappears, causing the extension to emit `generation-complete` before the rendered answer is actually finished.
+The core DSH -> bridge -> Chrome extension -> managed ChatGPT conversation path is fully functional. The previously observed premature-completion bug (where ChatGPT could expose a stable partial answer after Stop disappeared before the answer was fully rendered) has been resolved: completion now requires semantic completed-response action controls (including `data-testid="copy-turn-action-button"`) in addition to Stop disappearance and stability.
+
+Browser acceptance has been verified across all core scenarios (multi-turn reuse, distinct session URLs, switch-back restoration, full authoritative text extraction, abort handling with intentional uncertain -> fresh rehydrate safety semantics, restart persistence, and safe missing-chat recovery).
+
+Local unit/regression tests (56/56), type check, build, and `npm pack --dry-run` have passed. The only remaining release gate before publication is packed-install verification.
 
 See:
 
-- [`docs/2026-08-26-progress-and-debugging-log.md`](docs/2026-08-26-progress-and-debugging-log.md) for the implementation/debugging history and current stopping point;
-- [`docs/manual-smoke.md`](docs/manual-smoke.md) for the current manual acceptance matrix;
-- [`docs/superpowers/specs/2026-08-26-chatgpt-web-v0.1-design.md`](docs/superpowers/specs/2026-08-26-chatgpt-web-v0.1-design.md) for the as-built v0.1 architecture;
-- [`docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md`](docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md) for implementation status and remaining work.
+- [`docs/2026-08-26-progress-and-debugging-log.md`](docs/2026-08-26-progress-and-debugging-log.md) for the implementation/debugging history;
+- [`docs/manual-smoke.md`](docs/manual-smoke.md) for the completed manual acceptance matrix and packed-install instructions;
+- [`docs/superpowers/specs/2026-08-26-chatgpt-web-v0.1-design.md`](docs/superpowers/specs/2026-08-26-chatgpt-web-v0.1-design.md) for the as-built v0.1 architecture and resolved premature-completion findings;
+- [`docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md`](docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md) for implementation status and packed-install release gate.
 
 ## v0.1 scope
 
@@ -70,7 +74,7 @@ generation-complete(fullText)
   -> finish(stop)
 ```
 
-This intentionally sacrifices token-by-token DSH streaming for v0.1 correctness. The current open bug is ensuring that `generation-complete` itself is detected only after the ChatGPT answer is truly finished.
+This intentionally sacrifices token-by-token DSH streaming for v0.1 correctness. The premature-completion bug has been resolved by requiring semantic completed-response action markers (`data-testid="copy-turn-action-button"`, etc.) before `generation-complete` is emitted.
 
 ## Requirements
 
@@ -201,7 +205,7 @@ npm run build
 npm pack --dry-run
 ```
 
-A previous full run passed before later regression changes, but a **fresh complete run at the final branch HEAD is still required before release**. Do not infer current whole-suite status from an older run.
+Fresh local verification (56/56 tests) passed at the doc-sync HEAD. The remaining release gate is packed-install verification from the packaged tarball.
 
 Real-browser acceptance is manual because it depends on the authenticated ChatGPT Web session. See [`docs/manual-smoke.md`](docs/manual-smoke.md).
 
@@ -215,7 +219,7 @@ extension/chatgpt-page-adapter.js
 
 Do not spread ChatGPT selectors into the DSH adapter, transport, session manager, bridge server, or service worker.
 
-When a live DOM defect is found, gather evidence first, write a focused regression fixture/test, verify RED, then make the smallest production change. In particular, do not solve premature completion by merely increasing the current stability timeout without evidence of a stronger completion signal.
+When a live DOM defect is found, gather evidence first, write a focused regression fixture/test, verify RED, then make the smallest production change. Historically, the premature-completion bug was resolved by introducing semantic response action checks rather than merely increasing the stability timeout.
 
 ## Roadmap
 
