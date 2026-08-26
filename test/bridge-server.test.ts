@@ -73,6 +73,26 @@ test('explicit pre-send extension error remains retry-safe', async () => {
   socket.close(); await bridge.dispose()
 })
 
+test('ready state is still pre-send when extension reports an explicit failure', async () => {
+  const bridge = new BridgeServer({ host: '127.0.0.1', port: 0, expectedOrigin: EXTENSION_ORIGIN, heartbeatMs: 1000 })
+  const { port } = await bridge.start()
+  const socket = await connect(port, bridge)
+  socket.on('message', raw => {
+    try {
+      const outgoing = JSON.parse(raw.toString()) as { type?: string; requestId?: string }
+      if (outgoing.type === 'generate' && outgoing.requestId) {
+        socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'request-state', requestId: outgoing.requestId, stage: 'ready', seq: 0 }))
+        socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'error', requestId: outgoing.requestId, code: 'COMPOSER', message: 'composer unavailable', afterSend: false, seq: 1 }))
+      }
+    } catch {}
+  })
+  const events = await collect(bridge.generate({ requestId: 'ready-safe', sessionId: 's', prompt: 'p' }))
+  const error = events.at(-1)
+  assert.equal(error?.type, 'error')
+  if (error?.type === 'error') assert.equal(error.afterSend, false)
+  socket.close(); await bridge.dispose()
+})
+
 test('silent disconnect after generate dispatch is conservatively uncertain', async () => {
   const bridge = new BridgeServer({ host: '127.0.0.1', port: 0, expectedOrigin: EXTENSION_ORIGIN, heartbeatMs: 1000 })
   const { port } = await bridge.start()
