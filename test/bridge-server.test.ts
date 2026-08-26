@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import type { IncomingMessage } from 'node:http'
 import test from 'node:test'
 import { WebSocket } from 'ws'
 import { BridgeServer } from '../src/bridge-server.js'
@@ -22,6 +23,12 @@ async function connect(port: number, bridge: BridgeServer, origin = EXTENSION_OR
   assert.equal(bridge.isConnected(), true)
   return socket
 }
+async function expectUpgradeRejected(socket: WebSocket, expectedStatus: number): Promise<void> {
+  const [, response] = await once(socket, 'unexpected-response') as [unknown, IncomingMessage]
+  assert.equal(response.statusCode, expectedStatus)
+  response.resume()
+  await once(response, 'end')
+}
 async function collect(iterable: AsyncIterable<TransportEvent>): Promise<TransportEvent[]> {
   const result: TransportEvent[] = []
   for await (const event of iterable) result.push(event)
@@ -33,7 +40,7 @@ test('bridge binds loopback and accepts only expected extension origin', async (
   const address = await bridge.start()
   assert.equal(address.host, '127.0.0.1')
   const bad = new WebSocket(`ws://127.0.0.1:${address.port}/`, { origin: 'https://example.com' })
-  await once(bad, 'unexpected-response'); bad.terminate()
+  await expectUpgradeRejected(bad, 403)
   const good = await connect(address.port, bridge)
   assert.equal(good.readyState, WebSocket.OPEN)
   good.close(); await bridge.dispose()
@@ -44,7 +51,8 @@ test('bridge rejects a second extension connection while one is active', async (
   const { port } = await bridge.start()
   const first = await connect(port, bridge)
   const second = new WebSocket(`ws://127.0.0.1:${port}/`, { origin: EXTENSION_ORIGIN })
-  await once(second, 'unexpected-response'); second.terminate(); first.close(); await bridge.dispose()
+  await expectUpgradeRejected(second, 409)
+  first.close(); await bridge.dispose()
 })
 
 test('JSON heartbeat keeps a healthy extension connection alive', async () => {
