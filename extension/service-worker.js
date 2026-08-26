@@ -11,23 +11,17 @@ let activeRequest = null
 let activeWorkerTabId = null
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
-
 function sendWire(payload) {
   if (socket?.readyState !== WebSocket.OPEN) return false
   socket.send(JSON.stringify({ protocol: PROTOCOL, ...payload }))
   return true
 }
-
 async function storedWorkerTabId() {
   const value = await chrome.storage.session.get(WORKER_TAB_KEY)
   const id = value[WORKER_TAB_KEY]
   return Number.isInteger(id) ? id : null
 }
-
-async function clearWorkerTabId() {
-  activeWorkerTabId = null
-  await chrome.storage.session.remove(WORKER_TAB_KEY)
-}
+async function clearWorkerTabId() { activeWorkerTabId = null; await chrome.storage.session.remove(WORKER_TAB_KEY) }
 
 async function ensureWorkerTab() {
   let id = activeWorkerTabId ?? await storedWorkerTabId()
@@ -35,13 +29,8 @@ async function ensureWorkerTab() {
     try {
       const tab = await chrome.tabs.get(id)
       if (tab.id === id) { activeWorkerTabId = id; return tab }
-    } catch {
-      await clearWorkerTabId()
-      id = null
-    }
+    } catch { await clearWorkerTabId(); id = null }
   }
-
-  // Never search/adopt arbitrary existing ChatGPT tabs.
   const tab = await chrome.tabs.create({ url: 'https://chatgpt.com/', active: false })
   if (tab.id === undefined) throw new Error('Chrome did not return an id for the ChatGPT worker tab')
   activeWorkerTabId = tab.id
@@ -53,10 +42,7 @@ function waitForTabComplete(tabId, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     let timer
     const cleanup = () => { if (timer !== undefined) clearTimeout(timer); chrome.tabs.onUpdated.removeListener(listener) }
-    const listener = (updatedId, changeInfo, tab) => {
-      if (updatedId !== tabId || changeInfo.status !== 'complete') return
-      cleanup(); resolve(tab)
-    }
+    const listener = (updatedId, changeInfo, tab) => { if (updatedId === tabId && changeInfo.status === 'complete') { cleanup(); resolve(tab) } }
     chrome.tabs.onUpdated.addListener(listener)
     timer = setTimeout(() => { cleanup(); reject(new Error('Timed out waiting for ChatGPT worker tab to load')) }, timeoutMs)
     void chrome.tabs.get(tabId).then(tab => { if (tab.status === 'complete') { cleanup(); resolve(tab) } }).catch(() => {})
@@ -66,10 +52,7 @@ function waitForTabComplete(tabId, timeoutMs = 30000) {
 async function waitForContentScript(tabId, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    try {
-      const response = await chrome.tabs.sendMessage(tabId, { kind: 'dsh-ping' })
-      if (response?.ready) return
-    } catch {}
+    try { const response = await chrome.tabs.sendMessage(tabId, { kind: 'dsh-ping' }); if (response?.ready) return } catch {}
     await sleep(100)
   }
   throw new Error('ChatGPT content script did not become ready')
@@ -95,10 +78,10 @@ async function handleGenerate(message) {
   const run = { requestId: message.requestId, nextSeq: 0, afterSend: false }
   activeRequest = run
   try {
-    sendWire({ type: 'request-state', requestId: run.requestId, stage: 'navigating', seq: run.nextSeq++ })
+    if (!sendWire({ type: 'request-state', requestId: run.requestId, stage: 'navigating', seq: run.nextSeq++ })) throw new Error('local bridge disconnected before navigation')
     const tabId = await navigateWorker(message)
     if (activeRequest !== run) return
-    sendWire({ type: 'request-state', requestId: run.requestId, stage: 'ready', seq: run.nextSeq++ })
+    if (!sendWire({ type: 'request-state', requestId: run.requestId, stage: 'ready', seq: run.nextSeq++ })) throw new Error('local bridge disconnected before browser dispatch')
     const response = await chrome.tabs.sendMessage(tabId, { kind: 'dsh-generate', requestId: run.requestId, prompt: message.prompt, startSeq: run.nextSeq })
     if (!response?.accepted) throw new Error(response?.error ?? 'ChatGPT content script refused generation')
   } catch (error) {
@@ -114,30 +97,19 @@ async function handleAbort(requestId) {
   if (run === null || run.requestId !== requestId) return
   const tabId = activeWorkerTabId ?? await storedWorkerTabId()
   if (tabId !== null) {
-    try {
-      const response = await chrome.tabs.sendMessage(tabId, { kind: 'dsh-abort', requestId })
-      if (response?.stopped) return
-    } catch {}
+    try { const response = await chrome.tabs.sendMessage(tabId, { kind: 'dsh-abort', requestId }); if (response?.stopped) return } catch {}
   }
-  if (activeRequest === run) {
-    sendWire({ type: 'generation-aborted', requestId, seq: run.nextSeq++ })
-    activeRequest = null
-  }
+  if (activeRequest === run) { sendWire({ type: 'generation-aborted', requestId, seq: run.nextSeq++ }); activeRequest = null }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.kind !== 'dsh-event') return false
   const payload = message.payload
   const run = activeRequest
-  if (sender.tab?.id === undefined || sender.tab.id !== activeWorkerTabId || run === null || !payload || payload.requestId !== run.requestId) {
-    sendResponse({ forwarded: false })
-    return false
-  }
+  if (sender.tab?.id === undefined || sender.tab.id !== activeWorkerTabId || run === null || !payload || payload.requestId !== run.requestId) { sendResponse({ forwarded: false }); return false }
   if (!Number.isSafeInteger(payload.seq) || payload.seq !== run.nextSeq) {
     const forwarded = sendWire({ type: 'error', requestId: run.requestId, code: 'WORKER_SEQ', message: 'Content-script event sequence was not contiguous', afterSend: run.afterSend, seq: run.nextSeq })
-    sendResponse({ forwarded })
-    activeRequest = null
-    return false
+    sendResponse({ forwarded }); activeRequest = null; return false
   }
   run.nextSeq = payload.seq + 1
   if (payload.type === 'request-state' && (payload.stage === 'sent' || payload.stage === 'generating')) run.afterSend = true

@@ -24,6 +24,7 @@ interface PendingRequest {
   stream: EventStream<TransportEvent>
   lastSeq: number
   afterSend: boolean
+  disconnectUncertain: boolean
 }
 
 class EventStream<T> implements AsyncIterable<T> {
@@ -72,15 +73,11 @@ export class BridgeServer {
   private readonly pending = new Map<string, PendingRequest>()
 
   constructor(options: BridgeServerOptions) {
-    this.options = {
-      ...options,
-      heartbeatMs: options.heartbeatMs ?? 15_000,
-    }
+    this.options = { ...options, heartbeatMs: options.heartbeatMs ?? 15_000 }
   }
 
   async start(): Promise<{ host: string; port: number }> {
     if (this.httpServer !== undefined) throw new Error('bridge server already started')
-
     const httpServer = createServer((_request, response) => {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
       response.end('Not found')
@@ -88,24 +85,16 @@ export class BridgeServer {
     const websocketServer = new WebSocketServer({ noServer: true })
     this.httpServer = httpServer
     this.websocketServer = websocketServer
-
     httpServer.on('upgrade', (request, socket, head) => this.handleUpgrade(request, socket, head))
     websocketServer.on('connection', socket => this.attachSocket(socket))
 
     await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error): void => {
-        httpServer.off('listening', onListening)
-        reject(error)
-      }
-      const onListening = (): void => {
-        httpServer.off('error', onError)
-        resolve()
-      }
+      const onError = (error: Error): void => { httpServer.off('listening', onListening); reject(error) }
+      const onListening = (): void => { httpServer.off('error', onError); resolve() }
       httpServer.once('error', onError)
       httpServer.once('listening', onListening)
       httpServer.listen(this.options.port, this.options.host)
     })
-
     const address = httpServer.address() as AddressInfo
     return { host: this.options.host, port: address.port }
   }
@@ -116,50 +105,26 @@ export class BridgeServer {
 
   async *generate(request: GenerateRequest, _signal?: AbortSignal): AsyncIterable<TransportEvent> {
     if (this.pending.has(request.requestId)) {
-      yield {
-        type: 'error',
-        requestId: request.requestId,
-        code: 'BRIDGE_DUPLICATE_REQUEST',
-        message: `duplicate request id ${request.requestId}`,
-        afterSend: false,
-        seq: 0,
-      }
+      yield { type: 'error', requestId: request.requestId, code: 'BRIDGE_DUPLICATE_REQUEST', message: `duplicate request id ${request.requestId}`, afterSend: false, seq: 0 }
       return
     }
-
     if (!this.isConnected()) {
-      yield {
-        type: 'error',
-        requestId: request.requestId,
-        code: 'BRIDGE_EXTENSION_UNAVAILABLE',
-        message: 'ChatGPT Web extension is not connected to the local bridge',
-        afterSend: false,
-        seq: 0,
-      }
+      yield { type: 'error', requestId: request.requestId, code: 'BRIDGE_EXTENSION_UNAVAILABLE', message: 'ChatGPT Web extension is not connected to the local bridge', afterSend: false, seq: 0 }
       return
     }
 
     const stream = new EventStream<TransportEvent>()
-    const pending: PendingRequest = {
-      request,
-      stream,
-      lastSeq: -1,
-      afterSend: false,
-    }
+    const pending: PendingRequest = { request, stream, lastSeq: -1, afterSend: false, disconnectUncertain: false }
     this.pending.set(request.requestId, pending)
-
     try {
       this.send(wireGenerateMessage(request))
+      // From the moment the command is handed to the extension, a silent socket
+      // loss cannot prove the browser failed before Send. Explicit extension
+      // errors can still report afterSend=false and remain retry-safe.
+      pending.disconnectUncertain = true
     } catch (error) {
       this.pending.delete(request.requestId)
-      yield {
-        type: 'error',
-        requestId: request.requestId,
-        code: 'BRIDGE_SEND_FAILED',
-        message: error instanceof Error ? error.message : String(error),
-        afterSend: false,
-        seq: 0,
-      }
+      yield { type: 'error', requestId: request.requestId, code: 'BRIDGE_SEND_FAILED', message: error instanceof Error ? error.message : String(error), afterSend: false, seq: 0 }
       return
     }
 
@@ -177,56 +142,30 @@ export class BridgeServer {
   }
 
   async dispose(): Promise<void> {
-    if (this.heartbeat !== undefined) {
-      clearInterval(this.heartbeat)
-      this.heartbeat = undefined
-    }
-
+    if (this.heartbeat !== undefined) { clearInterval(this.heartbeat); this.heartbeat = undefined }
     const socket = this.socket
     this.socket = undefined
     this.helloReceived = false
     if (socket !== undefined && socket.readyState !== WebSocket.CLOSED) socket.close(1001, 'bridge shutdown')
 
     for (const pending of this.pending.values()) {
-      pending.stream.push({
-        type: 'error',
-        requestId: pending.request.requestId,
-        code: 'BRIDGE_SHUTDOWN',
-        message: 'ChatGPT Web bridge shut down',
-        afterSend: pending.afterSend,
-        seq: pending.lastSeq + 1,
-      })
+      pending.stream.push({ type: 'error', requestId: pending.request.requestId, code: 'BRIDGE_SHUTDOWN', message: 'ChatGPT Web bridge shut down', afterSend: pending.afterSend || pending.disconnectUncertain, seq: pending.lastSeq + 1 })
       pending.stream.end()
     }
     this.pending.clear()
-
     const websocketServer = this.websocketServer
     this.websocketServer = undefined
     websocketServer?.close()
-
     const httpServer = this.httpServer
     this.httpServer = undefined
-    if (httpServer !== undefined) {
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
-    }
+    if (httpServer !== undefined) await new Promise<void>(resolve => httpServer.close(() => resolve()))
   }
 
   private handleUpgrade(request: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer): void {
-    if (request.headers.origin !== this.options.expectedOrigin) {
-      rawHttpReject(socket, 403, 'Forbidden')
-      return
-    }
-    if (request.url !== '/') {
-      rawHttpReject(socket, 404, 'Not Found')
-      return
-    }
-    if (this.socket !== undefined && this.socket.readyState !== WebSocket.CLOSED) {
-      rawHttpReject(socket, 409, 'Conflict')
-      return
-    }
-    this.websocketServer?.handleUpgrade(request, socket, head, upgraded => {
-      this.websocketServer?.emit('connection', upgraded, request)
-    })
+    if (request.headers.origin !== this.options.expectedOrigin) { rawHttpReject(socket, 403, 'Forbidden'); return }
+    if (request.url !== '/') { rawHttpReject(socket, 404, 'Not Found'); return }
+    if (this.socket !== undefined && this.socket.readyState !== WebSocket.CLOSED) { rawHttpReject(socket, 409, 'Conflict'); return }
+    this.websocketServer?.handleUpgrade(request, socket, head, upgraded => this.websocketServer?.emit('connection', upgraded, request))
   }
 
   private attachSocket(socket: WebSocket): void {
@@ -245,10 +184,7 @@ export class BridgeServer {
           return
         }
         if (!this.helloReceived) throw new Error('extension must send hello before other messages')
-        if (message.type === 'pong') {
-          this.lastPongAt = Date.now()
-          return
-        }
+        if (message.type === 'pong') { this.lastPongAt = Date.now(); return }
 
         const pending = this.pending.get(message.requestId)
         if (pending === undefined) throw new Error(`event for unknown request id ${message.requestId}`)
@@ -257,9 +193,6 @@ export class BridgeServer {
 
         switch (message.type) {
           case 'request-state':
-            // Once the browser reports `ready`, it may cross Send before a later
-            // state reaches the bridge. A disconnect from this point is treated
-            // conservatively as uncertain rather than retry-safe.
             if (message.stage === 'ready' || message.stage === 'sent' || message.stage === 'generating') pending.afterSend = true
             pending.stream.push({ type: 'state', requestId: message.requestId, stage: message.stage, seq: message.seq })
             break
@@ -278,14 +211,7 @@ export class BridgeServer {
             pending.stream.end()
             break
           case 'error':
-            pending.stream.push({
-              type: 'error',
-              requestId: message.requestId,
-              code: message.code,
-              message: message.message,
-              afterSend: message.afterSend || pending.afterSend,
-              seq: message.seq,
-            })
+            pending.stream.push({ type: 'error', requestId: message.requestId, code: message.code, message: message.message, afterSend: message.afterSend || pending.afterSend, seq: message.seq })
             pending.stream.end()
             break
         }
@@ -298,20 +224,10 @@ export class BridgeServer {
       if (this.socket === socket) {
         this.socket = undefined
         this.helloReceived = false
-        if (this.heartbeat !== undefined) {
-          clearInterval(this.heartbeat)
-          this.heartbeat = undefined
-        }
+        if (this.heartbeat !== undefined) { clearInterval(this.heartbeat); this.heartbeat = undefined }
       }
       for (const pending of this.pending.values()) {
-        pending.stream.push({
-          type: 'error',
-          requestId: pending.request.requestId,
-          code: 'BRIDGE_DISCONNECTED',
-          message: 'ChatGPT Web extension disconnected during the request',
-          afterSend: pending.afterSend,
-          seq: pending.lastSeq + 1,
-        })
+        pending.stream.push({ type: 'error', requestId: pending.request.requestId, code: 'BRIDGE_DISCONNECTED', message: 'ChatGPT Web extension disconnected during the request', afterSend: pending.afterSend || pending.disconnectUncertain, seq: pending.lastSeq + 1 })
         pending.stream.end()
       }
     })
@@ -323,10 +239,7 @@ export class BridgeServer {
     this.heartbeat = setInterval(() => {
       const socket = this.socket
       if (socket?.readyState !== WebSocket.OPEN) return
-      if (Date.now() - this.lastPongAt > interval * 2) {
-        socket.terminate()
-        return
-      }
+      if (Date.now() - this.lastPongAt > interval * 2) { socket.terminate(); return }
       this.send(wirePingMessage(randomUUID()))
     }, interval)
     this.heartbeat.unref?.()

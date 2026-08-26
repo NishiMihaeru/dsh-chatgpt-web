@@ -7,7 +7,6 @@ import { EXTENSION_ORIGIN } from '../src/extension-identity.js'
 import { PROTOCOL, type TransportEvent } from '../src/protocol.js'
 
 function sleep(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)) }
-
 async function connect(port: number, bridge: BridgeServer, origin = EXTENSION_ORIGIN): Promise<WebSocket> {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/`, { origin })
   await once(socket, 'open')
@@ -23,7 +22,6 @@ async function connect(port: number, bridge: BridgeServer, origin = EXTENSION_OR
   assert.equal(bridge.isConnected(), true)
   return socket
 }
-
 async function collect(iterable: AsyncIterable<TransportEvent>): Promise<TransportEvent[]> {
   const result: TransportEvent[] = []
   for await (const event of iterable) result.push(event)
@@ -35,12 +33,10 @@ test('bridge binds loopback and accepts only expected extension origin', async (
   const address = await bridge.start()
   assert.equal(address.host, '127.0.0.1')
   const bad = new WebSocket(`ws://127.0.0.1:${address.port}/`, { origin: 'https://example.com' })
-  await once(bad, 'unexpected-response')
-  bad.terminate()
+  await once(bad, 'unexpected-response'); bad.terminate()
   const good = await connect(address.port, bridge)
   assert.equal(good.readyState, WebSocket.OPEN)
-  good.close()
-  await bridge.dispose()
+  good.close(); await bridge.dispose()
 })
 
 test('bridge rejects a second extension connection while one is active', async () => {
@@ -48,10 +44,7 @@ test('bridge rejects a second extension connection while one is active', async (
   const { port } = await bridge.start()
   const first = await connect(port, bridge)
   const second = new WebSocket(`ws://127.0.0.1:${port}/`, { origin: EXTENSION_ORIGIN })
-  await once(second, 'unexpected-response')
-  second.terminate()
-  first.close()
-  await bridge.dispose()
+  await once(second, 'unexpected-response'); second.terminate(); first.close(); await bridge.dispose()
 })
 
 test('JSON heartbeat keeps a healthy extension connection alive', async () => {
@@ -60,44 +53,38 @@ test('JSON heartbeat keeps a healthy extension connection alive', async () => {
   const socket = await connect(port, bridge)
   await sleep(100)
   assert.equal(bridge.isConnected(), true)
-  socket.close()
-  await bridge.dispose()
+  socket.close(); await bridge.dispose()
 })
 
-test('disconnect before browser readiness is retry-safe; disconnect from ready onward is uncertain', async () => {
-  const beforeBridge = new BridgeServer({ host: '127.0.0.1', port: 0, expectedOrigin: EXTENSION_ORIGIN, heartbeatMs: 1000 })
-  const beforeAddress = await beforeBridge.start()
-  const beforeSocket = await connect(beforeAddress.port, beforeBridge)
-  beforeSocket.on('message', raw => {
-    try {
-      const outgoing = JSON.parse(raw.toString()) as { type?: string }
-      if (outgoing.type === 'generate') beforeSocket.close()
-    } catch {}
-  })
-  const before = await collect(beforeBridge.generate({ requestId: 'before', sessionId: 's', prompt: 'p' }))
-  const beforeError = before.at(-1)
-  assert.equal(beforeError?.type, 'error')
-  if (beforeError?.type === 'error') assert.equal(beforeError.afterSend, false)
-  await beforeBridge.dispose()
-
-  const readyBridge = new BridgeServer({ host: '127.0.0.1', port: 0, expectedOrigin: EXTENSION_ORIGIN, heartbeatMs: 1000 })
-  const readyAddress = await readyBridge.start()
-  const readySocket = await connect(readyAddress.port, readyBridge)
-  readySocket.on('message', raw => {
+test('explicit pre-send extension error remains retry-safe', async () => {
+  const bridge = new BridgeServer({ host: '127.0.0.1', port: 0, expectedOrigin: EXTENSION_ORIGIN, heartbeatMs: 1000 })
+  const { port } = await bridge.start()
+  const socket = await connect(port, bridge)
+  socket.on('message', raw => {
     try {
       const outgoing = JSON.parse(raw.toString()) as { type?: string; requestId?: string }
-      if (outgoing.type === 'generate' && outgoing.requestId) {
-        readySocket.send(JSON.stringify({ protocol: PROTOCOL, type: 'request-state', requestId: outgoing.requestId, stage: 'ready', seq: 0 }))
-        setTimeout(() => readySocket.close(), 5)
-      }
+      if (outgoing.type === 'generate' && outgoing.requestId) socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'error', requestId: outgoing.requestId, code: 'NAV', message: 'navigation failed', afterSend: false, seq: 0 }))
     } catch {}
   })
-  const ready = await collect(readyBridge.generate({ requestId: 'ready', sessionId: 's', prompt: 'p' }))
-  assert.equal(ready[0]?.type, 'state')
-  const readyError = ready.at(-1)
-  assert.equal(readyError?.type, 'error')
-  if (readyError?.type === 'error') assert.equal(readyError.afterSend, true)
-  await readyBridge.dispose()
+  const events = await collect(bridge.generate({ requestId: 'safe', sessionId: 's', prompt: 'p' }))
+  const error = events.at(-1)
+  assert.equal(error?.type, 'error')
+  if (error?.type === 'error') assert.equal(error.afterSend, false)
+  socket.close(); await bridge.dispose()
+})
+
+test('silent disconnect after generate dispatch is conservatively uncertain', async () => {
+  const bridge = new BridgeServer({ host: '127.0.0.1', port: 0, expectedOrigin: EXTENSION_ORIGIN, heartbeatMs: 1000 })
+  const { port } = await bridge.start()
+  const socket = await connect(port, bridge)
+  socket.on('message', raw => {
+    try { const outgoing = JSON.parse(raw.toString()) as { type?: string }; if (outgoing.type === 'generate') socket.close() } catch {}
+  })
+  const events = await collect(bridge.generate({ requestId: 'uncertain', sessionId: 's', prompt: 'p' }))
+  const error = events.at(-1)
+  assert.equal(error?.type, 'error')
+  if (error?.type === 'error') assert.equal(error.afterSend, true)
+  await bridge.dispose()
 })
 
 test('invalid protocol closes the extension socket', async () => {
