@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
   CHATGPT_WEB_CODES,
   CHATGPT_WEB_MODEL,
@@ -16,6 +16,10 @@ import { SessionManager } from '../src/session-manager.js'
 
 function user(text: string) {
   return createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] })
+}
+
+function assistant(text: string) {
+  return createAssistantMessage({ source: { provider: CHATGPT_WEB_PROVIDER, model: CHATGPT_WEB_MODEL }, content: [{ type: 'text', text }] })
 }
 
 function options(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
@@ -155,6 +159,42 @@ test('explicit error after ready but before Send stays a retry-safe bridge failu
   ])
   const adapter = await adapterFor(transport)
   await expectStreamCode(adapter, options(), CHATGPT_WEB_CODES.BRIDGE)
+})
+
+test('missing managed conversation is rehydrated once before Send', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-chatgpt-web-rehydrate-'))
+  const sessions = new SessionManager(join(directory, 'state.json'))
+  await sessions.commitSuccess('session-1', 'system', [user('hello')], 'https://chatgpt.com/c/old-chat', 'world')
+
+  const requests: GenerateRequest[] = []
+  const transport: ChatTransport = {
+    async *generate(request) {
+      requests.push(request)
+      if (requests.length === 1) {
+        yield { type: 'state', requestId: request.requestId, stage: 'ready', seq: 0 }
+        yield { type: 'error', requestId: request.requestId, code: 'CHATGPT_CONVERSATION_MISSING', message: 'managed chat disappeared', afterSend: false, seq: 1 }
+        return
+      }
+      yield { type: 'session-ready', requestId: request.requestId, conversationUrl: 'https://chatgpt.com/c/new-chat', seq: 0 }
+      yield { type: 'complete', requestId: request.requestId, text: 'recovered', seq: 1 }
+    },
+    async abort() {},
+    async dispose() {},
+  }
+  const adapter = new ChatGptWebAdapter({ transport, sessions, queue: new RequestQueue() })
+  const chunks = await collect(adapter, options({
+    system: 'system',
+    messages: [user('hello'), assistant('world'), user('again')],
+  }))
+
+  assert.equal(chunks.at(-1)?.type, 'finish')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0]?.conversationUrl, 'https://chatgpt.com/c/old-chat')
+  assert.equal(requests[1]?.conversationUrl, undefined)
+  assert.match(requests[1]?.prompt ?? '', /hello/)
+  assert.match(requests[1]?.prompt ?? '', /world/)
+  assert.match(requests[1]?.prompt ?? '', /again/)
+  assert.equal((await sessions.get('session-1'))?.conversationUrl, 'https://chatgpt.com/c/new-chat')
 })
 
 test('after-send bridge error marks the request uncertain', async () => {
