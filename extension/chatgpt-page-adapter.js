@@ -42,6 +42,12 @@
       ?? null
   }
 
+  function conversationTurns() {
+    const articles = Array.from(document.querySelectorAll('article[data-turn]'))
+    if (articles.length > 0) return articles
+    return Array.from(document.querySelectorAll('[data-message-author-role]'))
+  }
+
   function assistantTurns() {
     const articles = Array.from(document.querySelectorAll('article[data-turn="assistant"]'))
     if (articles.length > 0) return articles
@@ -67,6 +73,31 @@
   }
 
   function isReady() { return composer() !== null }
+
+  function getConversationUrl(raw = location.href) {
+    let url
+    try { url = new URL(raw, location.href) } catch { return null }
+    if (url.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.port !== '') return null
+    const match = /^\/c\/([^/]+)\/?$/.exec(url.pathname)
+    return match?.[1] ? `https://chatgpt.com/c/${match[1]}` : null
+  }
+
+  function managedConversationMissing(expectedUrl) {
+    const error = new Error(`Managed ChatGPT conversation is unavailable: ${expectedUrl}`)
+    error.code = 'CHATGPT_CONVERSATION_MISSING'
+    return error
+  }
+
+  async function waitForManagedConversation(expectedUrl, timeoutMs = 10000) {
+    const expected = getConversationUrl(expectedUrl)
+    if (!expected) throw managedConversationMissing(expectedUrl)
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (getConversationUrl() === expected && conversationTurns().length > 0) return
+      await sleep(100)
+    }
+    throw managedConversationMissing(expected)
+  }
 
   function setNativeValue(element, value) {
     const prototype = Object.getPrototypeOf(element)
@@ -234,15 +265,12 @@
     return true
   }
 
-  function getConversationUrl(raw = location.href) {
-    let url
-    try { url = new URL(raw, location.href) } catch { return null }
-    if (url.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.port !== '') return null
-    const match = /^\/c\/([^/]+)\/?$/.exec(url.pathname)
-    return match?.[1] ? `https://chatgpt.com/c/${match[1]}` : null
-  }
-
   globalThis.__DSH_CHATGPT_PAGE_ADAPTER__ = Object.freeze({
-    isReady, sendMessage, observeGeneration, stopGeneration, getConversationUrl,
+    isReady,
+    waitForManagedConversation,
+    sendMessage,
+    observeGeneration,
+    stopGeneration,
+    getConversationUrl,
   })
 })()
