@@ -2,6 +2,7 @@
   'use strict'
 
   let activeRun = null
+  let emitChain = Promise.resolve()
 
   function page() {
     const adapter = globalThis.__DSH_CHATGPT_PAGE_ADAPTER__
@@ -10,7 +11,9 @@
   }
 
   function emit(payload) {
-    return chrome.runtime.sendMessage({ kind: 'dsh-event', payload })
+    const operation = emitChain.then(() => chrome.runtime.sendMessage({ kind: 'dsh-event', payload }))
+    emitChain = operation.catch(() => {})
+    return operation
   }
 
   async function runGeneration(message) {
@@ -35,10 +38,15 @@
 
     try {
       if (!page().isReady()) throw new Error('ChatGPT page is not ready')
-      const baseline = await page().sendMessage(message.prompt)
-      if (run.aborted) return
-      run.afterSend = true
-      await emit({ type: 'request-state', requestId: run.requestId, stage: 'sent', seq: nextSeq() })
+      const baseline = await page().sendMessage(message.prompt, {
+        isAborted: () => run.aborted || activeRun !== run,
+        beforeSend: async () => {
+          if (run.aborted || activeRun !== run) throw new Error('generation aborted before Send')
+          run.afterSend = true
+          await emit({ type: 'request-state', requestId: run.requestId, stage: 'sent', seq: nextSeq() })
+        },
+      })
+      if (run.aborted || activeRun !== run) return
       await reportUrl()
       urlTimer = setInterval(() => { void reportUrl() }, 100)
       await emit({ type: 'request-state', requestId: run.requestId, stage: 'generating', seq: nextSeq() })
@@ -100,7 +108,9 @@
       return false
     }
     if (message?.kind === 'dsh-abort') {
-      void abortGeneration(message.requestId).then(stopped => sendResponse({ stopped }))
+      void abortGeneration(message.requestId).then(stopped => sendResponse({ stopped })).catch(error => {
+        sendResponse({ stopped: false, error: error instanceof Error ? error.message : String(error) })
+      })
       return true
     }
     return false

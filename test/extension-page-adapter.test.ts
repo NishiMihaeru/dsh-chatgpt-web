@@ -5,7 +5,11 @@ import { Window } from 'happy-dom'
 
 interface PageAdapter {
   isReady(): boolean
-  sendMessage(text: string): Promise<{ assistantCount: number; assistantText: string }>
+  sendMessage(text: string, options?: {
+    isAborted?: () => boolean
+    beforeSend?: () => void | Promise<void>
+    sendTimeoutMs?: number
+  }): Promise<{ assistantCount: number; assistantText: string }>
   observeGeneration(options?: {
     baseline?: { assistantCount: number; assistantText: string }
     onUpdate?: (update: { text: string; append: boolean; delta: string }) => void
@@ -36,13 +40,27 @@ test('page adapter detects composer and accepts only managed conversation URLs',
   assert.equal(adapter.getConversationUrl('https://example.com/c/abc'), null)
 })
 
-test('sendMessage fills composer and clicks send without scanning sidebar', async () => {
+test('sendMessage publishes the sent boundary before clicking Send', async () => {
   const { window, adapter } = await fixture('chatgpt-ready.html')
-  let clicked = 0
-  window.document.querySelector('button')?.addEventListener('click', () => { clicked += 1 })
-  await adapter.sendMessage('hello from DSH')
+  const order: string[] = []
+  window.document.querySelector('button')?.addEventListener('click', () => { order.push('click') })
+  await adapter.sendMessage('hello from DSH', { beforeSend: () => { order.push('boundary') } })
   assert.match(window.document.querySelector('#prompt-textarea')?.textContent ?? '', /hello from DSH/)
-  assert.equal(clicked, 1)
+  assert.deepEqual(order, ['boundary', 'click'])
+})
+
+test('sendMessage never clicks Send after cancellation while waiting', async () => {
+  const { window, adapter } = await fixture('chatgpt-ready.html')
+  const button = window.document.querySelector('button')
+  assert.ok(button)
+  button.disabled = true
+  let aborted = false
+  let clicked = 0
+  button.addEventListener('click', () => { clicked += 1 })
+  const sending = adapter.sendMessage('do not send', { isAborted: () => aborted, sendTimeoutMs: 500 })
+  setTimeout(() => { aborted = true }, 20)
+  await assert.rejects(sending, /aborted before Send/)
+  assert.equal(clicked, 0)
 })
 
 test('thinking status is filtered and append-compatible updates emit only suffix', async () => {

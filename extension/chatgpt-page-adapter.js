@@ -121,9 +121,10 @@
     }
   }
 
-  async function waitForSendButton(timeoutMs = 5000) {
+  async function waitForSendButton(timeoutMs = 5000, isAborted = () => false) {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
+      if (isAborted()) throw new Error('generation aborted before Send')
       const button = sendButton()
       if (button && !button.disabled && button.getAttribute('aria-disabled') !== 'true') return button
       await sleep(50)
@@ -131,15 +132,26 @@
     throw new Error('ChatGPT send button did not become ready')
   }
 
-  async function sendMessage(text) {
+  async function sendMessage(text, options = {}) {
     const input = composer()
     if (!input) throw new Error('ChatGPT composer was not found')
+    const isAborted = typeof options.isAborted === 'function' ? options.isAborted : () => false
+    const beforeSend = typeof options.beforeSend === 'function' ? options.beforeSend : async () => {}
+    if (isAborted()) throw new Error('generation aborted before Send')
+
     lastSendBaseline = {
       assistantCount: assistantTurns().length,
       assistantText: latestAssistantText(),
     }
     setComposerText(input, text)
-    const button = await waitForSendButton()
+    const button = await waitForSendButton(options.sendTimeoutMs ?? 5000, isAborted)
+    if (isAborted()) throw new Error('generation aborted before Send')
+
+    // The caller publishes the conservative "sent" boundary before the click.
+    // If cancellation arrives after that boundary but before the synchronous
+    // click, treating the request as uncertain is safe; the reverse is not.
+    await beforeSend()
+    if (isAborted()) throw new Error('generation aborted at Send boundary')
     button.click()
     return { ...lastSendBaseline }
   }

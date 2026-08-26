@@ -154,7 +154,7 @@ async function handleAbort(requestId) {
       const response = await chrome.tabs.sendMessage(tabId, { kind: 'dsh-abort', requestId })
       if (response?.stopped) return
     } catch {
-      // Fall through to a local terminal event. If content already clicked Send,
+      // Fall through to a local terminal event. If content already crossed Send,
       // run.afterSend was updated from its request-state event below.
     }
   }
@@ -170,7 +170,15 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   const payload = message.payload
   const run = activeRequest
   if (run === null || !payload || payload.requestId !== run.requestId) return
-  if (!Number.isSafeInteger(payload.seq) || payload.seq < run.nextSeq) return
+  if (!Number.isSafeInteger(payload.seq) || payload.seq !== run.nextSeq) {
+    sendWire({
+      type: 'error', requestId: run.requestId, code: 'WORKER_SEQ',
+      message: 'Content-script event sequence was not contiguous', afterSend: run.afterSend,
+      seq: run.nextSeq,
+    })
+    activeRequest = null
+    return
+  }
   run.nextSeq = payload.seq + 1
   if (payload.type === 'request-state' && (payload.stage === 'sent' || payload.stage === 'generating')) run.afterSend = true
   sendWire(payload)
@@ -181,8 +189,17 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 
 chrome.tabs.onRemoved.addListener(tabId => {
   if (tabId !== activeWorkerTabId) return
+  const run = activeRequest
   activeWorkerTabId = null
   void chrome.storage.session.remove(WORKER_TAB_KEY)
+  if (run !== null) {
+    sendWire({
+      type: 'error', requestId: run.requestId, code: 'WORKER_TAB_CLOSED',
+      message: 'Dedicated ChatGPT worker tab was closed', afterSend: run.afterSend,
+      seq: run.nextSeq,
+    })
+    activeRequest = null
+  }
 })
 
 function scheduleReconnect() {
