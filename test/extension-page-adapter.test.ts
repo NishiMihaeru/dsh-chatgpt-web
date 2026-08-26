@@ -148,6 +148,46 @@ test('an active Stop button extends the first-content deadline without replaying
   assert.equal(updates.some(update => update.text.includes('OLD ANSWER')), false)
 })
 
+test('a false stable pause after Stop disappears does not complete before response actions appear', async () => {
+  const { window, adapter } = await fixture('chatgpt-ready.html')
+  const stop = window.document.createElement('button')
+  stop.setAttribute('data-testid', 'stop-button')
+  window.document.body.append(stop)
+
+  const observation = adapter.observeGeneration({
+    baseline: { assistantCount: 0, assistantText: '' },
+    startTimeoutMs: 1000,
+    completionStabilityMs: 30,
+    overallTimeoutMs: 2000,
+  })
+
+  const turn = window.document.createElement('section')
+  turn.setAttribute('data-turn', 'assistant')
+  const message = window.document.createElement('div')
+  message.setAttribute('data-message-author-role', 'assistant')
+  const body = window.document.createElement('div')
+  body.className = 'markdown'
+  body.textContent = 'Хорошо 🙂'
+  message.append(body)
+  turn.append(message)
+
+  setTimeout(() => window.document.body.append(turn), 10)
+  setTimeout(() => stop.remove(), 20)
+  setTimeout(() => { body.textContent = 'Хорошо 🙂 А у тебя как?' }, 100)
+  setTimeout(() => {
+    const actions = window.document.createElement('div')
+    actions.setAttribute('role', 'group')
+    actions.setAttribute('aria-label', 'Действия с ответом')
+    const copy = window.document.createElement('button')
+    copy.setAttribute('data-testid', 'copy-turn-action-button')
+    actions.append(copy)
+    turn.append(actions)
+  }, 130)
+
+  const final = await observation
+  assert.equal(final, 'Хорошо 🙂 А у тебя как?')
+})
+
 test('rewritten snapshot is marked non-append and later compatible snapshot resumes', async () => {
   const { window, adapter } = await fixture('chatgpt-thinking.html')
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
