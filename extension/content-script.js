@@ -43,6 +43,10 @@
 
     try {
       if (!page().isReady()) throw new Error('ChatGPT page is not ready')
+      if (message.conversationUrl) {
+        await page().waitForManagedConversation(message.conversationUrl)
+        if (run.aborted || activeRun !== run) return
+      }
       const baseline = await page().sendMessage(message.prompt, {
         isAborted: () => run.aborted || activeRun !== run,
         beforeSend: async () => {
@@ -72,8 +76,11 @@
       await emit({ type: 'generation-complete', requestId: run.requestId, text: finalText, seq: nextSeq() })
     } catch (error) {
       if (!run.aborted && activeRun === run) {
+        const code = error && typeof error === 'object' && typeof error.code === 'string'
+          ? error.code
+          : 'CHATGPT_PAGE'
         await emit({
-          type: 'error', requestId: run.requestId, code: 'CHATGPT_PAGE',
+          type: 'error', requestId: run.requestId, code,
           message: error instanceof Error ? error.message : String(error),
           afterSend: run.afterSend, seq: nextSeq(),
         })
