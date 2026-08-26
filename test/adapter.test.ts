@@ -32,6 +32,14 @@ function options(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
   }
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) assert.fail('timed out waiting for asynchronous test condition')
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
 class FakeTransport implements ChatTransport {
   readonly requests: GenerateRequest[] = []
   readonly aborts: string[] = []
@@ -247,7 +255,7 @@ test('two concurrent calls are serialized by RequestQueue', async () => {
   const adapter = await adapterFor(transport)
   const first = collect(adapter, options({ sessionId: 's1' as never }))
   const second = collect(adapter, options({ sessionId: 's2' as never }))
-  await new Promise(resolve => setImmediate(resolve))
+  await waitUntil(() => starts === 1)
   assert.equal(starts, 1)
   releaseFirst?.()
   await Promise.all([first, second])
