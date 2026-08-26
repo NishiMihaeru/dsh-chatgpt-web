@@ -79,7 +79,9 @@
     try { url = new URL(raw, location.href) } catch { return null }
     if (url.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.port !== '') return null
     const match = /^\/c\/([^/]+)\/?$/.exec(url.pathname)
-    return match?.[1] ? `https://chatgpt.com/c/${match[1]}` : null
+    const id = match?.[1]
+    if (!id || id.startsWith('WEB:')) return null
+    return `https://chatgpt.com/c/${id}`
   }
 
   function managedConversationMissing(expectedUrl) {
