@@ -15,20 +15,20 @@ No OpenAI API key, OpenAI Platform inference credits, or Secure MCP Tunnel are r
 
 ## Status
 
-**v0.1 is work in progress until final release gates are complete.**
+**v0.1 implementation and release acceptance are complete. Market/npm publication is still a work in progress.**
 
 The core DSH -> bridge -> Chrome extension -> managed ChatGPT conversation path is fully functional. The previously observed premature-completion bug (where ChatGPT could expose a stable partial answer after Stop disappeared before the answer was fully rendered) has been resolved: completion now requires semantic completed-response action controls (including `data-testid="copy-turn-action-button"`) in addition to Stop disappearance and stability.
 
 Browser acceptance has been verified across all core scenarios (multi-turn reuse, distinct session URLs, switch-back restoration, full authoritative text extraction, abort handling with intentional uncertain -> fresh rehydrate safety semantics, restart persistence, and safe missing-chat recovery).
 
-Local unit/regression tests (56/56), type check, build, and `npm pack --dry-run` have passed. The only remaining release gate before publication is packed-install verification.
+Local unit/regression tests (56/56), type check, build, `npm pack --dry-run`, and packed-install verification have passed. The generated tarball installed successfully into an isolated DSH profile and registered the expected `chatgpt-web/auto` bundle/model without depending on the source checkout.
 
 See:
 
 - [`docs/2026-08-26-progress-and-debugging-log.md`](docs/2026-08-26-progress-and-debugging-log.md) for the implementation/debugging history;
-- [`docs/manual-smoke.md`](docs/manual-smoke.md) for the completed manual acceptance matrix and packed-install instructions;
+- [`docs/manual-smoke.md`](docs/manual-smoke.md) for the manual browser acceptance matrix and packed-install procedure;
 - [`docs/superpowers/specs/2026-08-26-chatgpt-web-v0.1-design.md`](docs/superpowers/specs/2026-08-26-chatgpt-web-v0.1-design.md) for the as-built v0.1 architecture and resolved premature-completion findings;
-- [`docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md`](docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md) for implementation status and packed-install release gate.
+- [`docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md`](docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md) for the implementation plan and historical release checklist.
 
 ## v0.1 scope
 
@@ -127,7 +127,7 @@ The intended install command after an npm release is:
 dsh plugin --profile web add dsh-chatgpt-web
 ```
 
-v0.1 has not reached release acceptance yet; do not treat this as a claim that a current npm release is available.
+v0.1 release acceptance is complete; this README does not yet claim that an npm release is available.
 
 ## Conversation model
 
@@ -205,7 +205,7 @@ npm run build
 npm pack --dry-run
 ```
 
-Fresh local verification (56/56 tests) passed at the doc-sync HEAD. The remaining release gate is packed-install verification from the packaged tarball.
+Fresh local verification (56/56 tests) passed at the doc-sync HEAD. Packed-install verification also passed from the generated tarball in an isolated `chatgpt-web-smoke` profile, confirming the packaged plugin installs without depending on the source checkout and exposes the expected bundle/model registration.
 
 Real-browser acceptance is manual because it depends on the authenticated ChatGPT Web session. See [`docs/manual-smoke.md`](docs/manual-smoke.md).
 
