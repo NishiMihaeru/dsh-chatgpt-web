@@ -13,6 +13,9 @@ const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url
 }
 const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
+const design = await readFile(new URL('../docs/superpowers/specs/2026-08-26-chatgpt-web-v0.1-design.md', import.meta.url), 'utf8')
+const plan = await readFile(new URL('../docs/superpowers/plans/2026-08-26-chatgpt-web-v0.1-implementation.md', import.meta.url), 'utf8')
+const smoke = await readFile(new URL('../docs/manual-smoke.md', import.meta.url), 'utf8')
 const manifest = JSON.parse(await readFile(new URL('../extension/manifest.json', import.meta.url), 'utf8')) as {
   manifest_version: number
   key: string
@@ -63,4 +66,31 @@ test('README documents install, limitations, privacy, and local-only verificatio
   assert.match(readme, /npm run check/)
   assert.match(readme, /npm test/)
   assert.match(readme, /no GitHub Actions or CI workflow/i)
+})
+
+test('current documentation uses authoritative-completion-only v0.1 semantics', () => {
+  for (const document of [readme, design, plan, smoke]) {
+    assert.match(document, /authoritative/i)
+    assert.match(document, /generation-complete/i)
+  }
+
+  assert.match(readme, /work in progress/i)
+  assert.match(readme, /browser `delta` events are \*\*internal transport observations only\*\*/i)
+  assert.match(design, /There are no separate `open-session`, `reset-session`, or `generation-start` wire messages/i)
+  assert.match(plan, /browser deltas are no longer DSH text deltas/i)
+  assert.match(smoke, /Do not expect token-by-token DSH streaming in v0\.1/i)
+
+  assert.doesNotMatch(readme, /v0\.1 provides text generation, live streaming/i)
+  assert.doesNotMatch(smoke, /verify clean native DSH streaming/i)
+})
+
+test('current documentation records the unresolved premature-completion release blocker', () => {
+  for (const document of [readme, design, plan, smoke]) {
+    assert.match(document, /premature/i)
+    assert.match(document, /completion/i)
+  }
+  assert.match(readme, /not release-ready/i)
+  assert.match(design, /must not be released yet/i)
+  assert.match(plan, /release acceptance is blocked/i)
+  assert.match(smoke, /Do not mark v0\.1 accepted yet/i)
 })
