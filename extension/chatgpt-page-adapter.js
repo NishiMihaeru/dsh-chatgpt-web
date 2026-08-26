@@ -54,6 +54,17 @@
     return Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'))
   }
 
+  function latestAssistantTurnContainer() {
+    const turns = Array.from(document.querySelectorAll('section[data-turn="assistant"], article[data-turn="assistant"]'))
+    return turns.at(-1) ?? assistantTurns().at(-1) ?? null
+  }
+
+  function responseActionsReady() {
+    const turn = latestAssistantTurnContainer()
+    if (!turn) return false
+    return turn.querySelector('button[data-testid="copy-turn-action-button"]') !== null
+  }
+
   function cleanAssistantText(text) {
     const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n')
     while (lines.length > 0 && TRANSIENT_STATUS.has(lines[0].trim().toLowerCase())) lines.shift()
@@ -242,7 +253,7 @@
           }
         }
 
-        if (!stopping && text !== '' && now - lastChangeAt >= completionStabilityMs) {
+        if (!stopping && responseActionsReady() && text !== '' && now - lastChangeAt >= completionStabilityMs) {
           cleanup()
           resolve(text)
         }
