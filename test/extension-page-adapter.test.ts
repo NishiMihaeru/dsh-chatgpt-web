@@ -23,6 +23,12 @@ async function fixture(name: string, url = 'https://chatgpt.com/'): Promise<{ wi
   return { window, adapter }
 }
 
+function appendResponseActions(window: Window, turn: Element): void {
+  const copy = window.document.createElement('button')
+  copy.setAttribute('data-testid', 'copy-turn-action-button')
+  turn.append(copy)
+}
+
 test('page adapter detects composer and accepts only managed conversation URLs', async () => {
   const { adapter } = await fixture('chatgpt-ready.html', 'https://chatgpt.com/c/abc?x=1#hash')
   assert.equal(adapter.isReady(), true)
@@ -77,9 +83,12 @@ test('thinking status is filtered and append-compatible updates emit only suffix
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
   const observation = adapter.observeGeneration({ baseline: { assistantCount: 0, assistantText: '' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 30, overallTimeoutMs: 2000 })
   const body = window.document.querySelector('.markdown')
+  const turn = window.document.querySelector('[data-message-author-role="assistant"]')
   assert.ok(body)
+  assert.ok(turn)
   setTimeout(() => { body.textContent = '1' }, 20)
   setTimeout(() => { body.textContent = '12' }, 40)
+  setTimeout(() => appendResponseActions(window, turn), 70)
   const final = await observation
   assert.equal(final, '12')
   assert.deepEqual(updates.filter(update => update.delta !== '').map(update => update.delta), ['1', '2'])
@@ -99,18 +108,18 @@ test('a Stop button appearing before the new assistant turn never replays the pr
   stop.setAttribute('data-testid', 'stop-button')
   window.document.body.append(stop)
 
+  const fresh = window.document.createElement('article')
+  fresh.setAttribute('data-turn', 'assistant')
+  const freshBody = window.document.createElement('div')
+  freshBody.className = 'markdown'
+  freshBody.textContent = 'NEW ANSWER'
+  fresh.append(freshBody)
+
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
   const observation = adapter.observeGeneration({ baseline: { assistantCount: 1, assistantText: 'OLD ANSWER' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 30, overallTimeoutMs: 2000 })
-  setTimeout(() => {
-    const fresh = window.document.createElement('article')
-    fresh.setAttribute('data-turn', 'assistant')
-    const freshBody = window.document.createElement('div')
-    freshBody.className = 'markdown'
-    freshBody.textContent = 'NEW ANSWER'
-    fresh.append(freshBody)
-    window.document.body.append(fresh)
-  }, 20)
+  setTimeout(() => window.document.body.append(fresh), 20)
   setTimeout(() => stop.remove(), 50)
+  setTimeout(() => appendResponseActions(window, fresh), 60)
   const final = await observation
   assert.equal(final, 'NEW ANSWER')
   assert.equal(updates.some(update => update.text.includes('OLD ANSWER')), false)
@@ -130,18 +139,18 @@ test('an active Stop button extends the first-content deadline without replaying
   stop.setAttribute('data-testid', 'stop-button')
   window.document.body.append(stop)
 
+  const fresh = window.document.createElement('article')
+  fresh.setAttribute('data-turn', 'assistant')
+  const freshBody = window.document.createElement('div')
+  freshBody.className = 'markdown'
+  freshBody.textContent = 'LATE ANSWER'
+  fresh.append(freshBody)
+
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
   const observation = adapter.observeGeneration({ baseline: { assistantCount: 1, assistantText: 'OLD ANSWER' }, onUpdate: update => updates.push(update), startTimeoutMs: 20, completionStabilityMs: 20, overallTimeoutMs: 1000 })
-  setTimeout(() => {
-    const fresh = window.document.createElement('article')
-    fresh.setAttribute('data-turn', 'assistant')
-    const freshBody = window.document.createElement('div')
-    freshBody.className = 'markdown'
-    freshBody.textContent = 'LATE ANSWER'
-    fresh.append(freshBody)
-    window.document.body.append(fresh)
-  }, 60)
+  setTimeout(() => window.document.body.append(fresh), 60)
   setTimeout(() => stop.remove(), 100)
+  setTimeout(() => appendResponseActions(window, fresh), 110)
 
   const final = await observation
   assert.equal(final, 'LATE ANSWER')
@@ -193,10 +202,13 @@ test('rewritten snapshot is marked non-append and later compatible snapshot resu
   const updates: Array<{ text: string; append: boolean; delta: string }> = []
   const observation = adapter.observeGeneration({ baseline: { assistantCount: 0, assistantText: '' }, onUpdate: update => updates.push(update), startTimeoutMs: 1000, completionStabilityMs: 40, overallTimeoutMs: 2000 })
   const body = window.document.querySelector('.markdown')
+  const turn = window.document.querySelector('[data-message-author-role="assistant"]')
   assert.ok(body)
+  assert.ok(turn)
   setTimeout(() => { body.textContent = 'ab' }, 10)
   setTimeout(() => { body.textContent = 'ax' }, 25)
   setTimeout(() => { body.textContent = 'abc' }, 45)
+  setTimeout(() => appendResponseActions(window, turn), 90)
   const final = await observation
   assert.equal(final, 'abc')
   assert.equal(updates.some(update => update.text === 'ax' && update.append === false), true)
