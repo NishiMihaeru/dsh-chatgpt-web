@@ -63,7 +63,6 @@
 
       const finalText = await page().observeGeneration({
         baseline,
-        requestPrompt: message.prompt,
         onUpdate(update) {
           if (run.aborted || activeRun !== run) return
           void reportUrl()
