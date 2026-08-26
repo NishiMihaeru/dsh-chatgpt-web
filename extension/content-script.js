@@ -1,0 +1,108 @@
+(() => {
+  'use strict'
+
+  let activeRun = null
+
+  function page() {
+    const adapter = globalThis.__DSH_CHATGPT_PAGE_ADAPTER__
+    if (!adapter) throw new Error('ChatGPT page adapter is not loaded')
+    return adapter
+  }
+
+  function emit(payload) {
+    return chrome.runtime.sendMessage({ kind: 'dsh-event', payload })
+  }
+
+  async function runGeneration(message) {
+    const run = {
+      requestId: message.requestId,
+      seq: message.startSeq ?? 0,
+      afterSend: false,
+      aborted: false,
+    }
+    activeRun = run
+    let urlReported = false
+    let urlTimer
+    const nextSeq = () => run.seq++
+
+    const reportUrl = async () => {
+      if (run.aborted || urlReported || activeRun !== run) return
+      const url = page().getConversationUrl()
+      if (!url) return
+      urlReported = true
+      await emit({ type: 'session-ready', requestId: run.requestId, conversationUrl: url, seq: nextSeq() })
+    }
+
+    try {
+      if (!page().isReady()) throw new Error('ChatGPT page is not ready')
+      const baseline = await page().sendMessage(message.prompt)
+      if (run.aborted) return
+      run.afterSend = true
+      await emit({ type: 'request-state', requestId: run.requestId, stage: 'sent', seq: nextSeq() })
+      await reportUrl()
+      urlTimer = setInterval(() => { void reportUrl() }, 100)
+      await emit({ type: 'request-state', requestId: run.requestId, stage: 'generating', seq: nextSeq() })
+
+      const finalText = await page().observeGeneration({
+        baseline,
+        onUpdate(update) {
+          if (run.aborted || activeRun !== run) return
+          void reportUrl()
+          if (update.append && update.delta) {
+            void emit({ type: 'delta', requestId: run.requestId, text: update.delta, seq: nextSeq() })
+          }
+        },
+      })
+
+      if (run.aborted || activeRun !== run) return
+      await reportUrl()
+      if (!urlReported) throw new Error('ChatGPT conversation URL was not created')
+      await emit({ type: 'generation-complete', requestId: run.requestId, text: finalText, seq: nextSeq() })
+    } catch (error) {
+      if (!run.aborted && activeRun === run) {
+        await emit({
+          type: 'error',
+          requestId: run.requestId,
+          code: 'CHATGPT_PAGE',
+          message: error instanceof Error ? error.message : String(error),
+          afterSend: run.afterSend,
+          seq: nextSeq(),
+        })
+      }
+    } finally {
+      if (urlTimer !== undefined) clearInterval(urlTimer)
+      if (activeRun === run) activeRun = null
+    }
+  }
+
+  async function abortGeneration(requestId) {
+    const run = activeRun
+    if (run === null || run.requestId !== requestId) return false
+    run.aborted = true
+    page().stopGeneration()
+    await emit({ type: 'generation-aborted', requestId, seq: run.seq++ })
+    if (activeRun === run) activeRun = null
+    return true
+  }
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.kind === 'dsh-ping') {
+      sendResponse({ ready: page().isReady() })
+      return false
+    }
+    if (message?.kind === 'dsh-generate') {
+      if (activeRun !== null) {
+        sendResponse({ accepted: false, error: 'worker tab already has an active request' })
+        return false
+      }
+      void runGeneration(message)
+      sendResponse({ accepted: true })
+      return false
+    }
+    if (message?.kind === 'dsh-abort') {
+      void abortGeneration(message.requestId).then(stopped => sendResponse({ stopped }))
+      return true
+    }
+    return false
+  })
+})()

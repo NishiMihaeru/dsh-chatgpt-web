@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "DSH ChatGPT Web Bridge",
+  "description": "Local browser bridge for the dsh-chatgpt-web DeepSeek Harness plugin.",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAy89iuhKXJ1oxESqZ2BhkuWnYx8VEHBbt0HrXy6u/NVlmiOyqcOz+7EbMRPeB7BeXp3lhHpdRaSUHSD+zWtDSDu8UneSEpyNXIXVzQyxT6trCvz3U6JkCw3ij4bbVVSuodfEdGdtTFQxpm50ZinynWTr6hDyK+f4oOzUYZP2CujhoVuZP4nxVGjfs8qZY/x8QYqiO/eLpmHLTJ+5ygCEsHJeG1mEjVJqOSMo/F/3kzzOwq1j6nd+tQ6FDIGsPqBm667EiKcf2x6NAEy5mJLxtcPQMJF3cUGxcoSdlMPW8x+0IYQVQRwZcAbysBymCzfvKbQhzvfm6lAbC4Ayo9Zl50wIDAQAB",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": ["http://127.0.0.1/*", "https://chatgpt.com/*"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["chatgpt-page-adapter.js", "content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
