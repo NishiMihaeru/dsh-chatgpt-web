@@ -213,6 +213,27 @@
           return
         }
 
+        // ChatGPT may briefly mount a new assistant node whose contents are a
+        // clone of the previous answer. That node proves the new turn exists,
+        // but its baseline-identical text is not safe to stream yet. If the
+        // real answer diverges we start streaming then; if generation finishes
+        // with the same text, return it only as the authoritative final value.
+        if (!responseVisible && newAssistantTurn && text === baseline.assistantText) {
+          if (text !== latestRaw) {
+            latestRaw = text
+            lastChangeAt = now
+          }
+          if (!stopping && text !== '' && now - lastChangeAt >= completionStabilityMs) {
+            cleanup()
+            resolve(text)
+            return
+          }
+          if (now >= startDeadline && !stopping && text === '') {
+            fail(new Error('ChatGPT generation started but no new assistant response appeared'))
+          }
+          return
+        }
+
         // ChatGPT may mutate controls or even the previous assistant turn while
         // preparing a continuation. Only a newly inserted assistant turn belongs
         // to this request and is safe to stream.
