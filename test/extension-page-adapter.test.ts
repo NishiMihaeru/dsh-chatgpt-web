@@ -27,6 +27,7 @@ test('page adapter detects composer and accepts only managed conversation URLs',
   const { adapter } = await fixture('chatgpt-ready.html', 'https://chatgpt.com/c/abc?x=1#hash')
   assert.equal(adapter.isReady(), true)
   assert.equal(adapter.getConversationUrl(), 'https://chatgpt.com/c/abc')
+  assert.equal(adapter.getConversationUrl('https://chatgpt.com/c/WEB:844a3154-d7da-4e73-a05c-8c565c9393a4'), null)
   assert.equal(adapter.getConversationUrl('https://chatgpt.com/'), null)
   assert.equal(adapter.getConversationUrl('https://example.com/c/abc'), null)
 })
