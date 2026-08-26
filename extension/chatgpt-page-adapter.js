@@ -48,26 +48,10 @@
     return Array.from(document.querySelectorAll('[data-message-author-role]'))
   }
 
-  function turnRole(turn) {
-    return turn.getAttribute('data-turn') ?? turn.getAttribute('data-message-author-role') ?? ''
-  }
-
-  function turnContent(turn) {
-    return turn.querySelector('[data-message-content]')
-      ?? turn.querySelector('.whitespace-pre-wrap')
-      ?? turn.querySelector('.markdown')
-      ?? turn.querySelector('.prose')
-      ?? turn.querySelector('[class*="markdown"]')
-      ?? turn
-  }
-
-  function normalizedTurnText(turn) {
-    const content = turnContent(turn)
-    return String(content.innerText || content.textContent || '').replace(/\r\n/g, '\n').trim()
-  }
-
   function assistantTurns() {
-    return conversationTurns().filter(turn => turnRole(turn) === 'assistant')
+    const articles = Array.from(document.querySelectorAll('article[data-turn="assistant"]'))
+    if (articles.length > 0) return articles
+    return Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'))
   }
 
   function cleanAssistantText(text) {
@@ -77,34 +61,15 @@
     return TRANSIENT_STATUS.has(cleaned.toLowerCase()) ? '' : cleaned
   }
 
-  function assistantText(turn) {
-    if (!turn) return ''
-    const answer = turnContent(turn)
-    return cleanAssistantText(answer.innerText || answer.textContent || '')
-  }
-
   function latestAssistantText() {
-    return assistantText(assistantTurns().at(-1))
-  }
-
-  function assistantTurnAfterPrompt(requestPrompt) {
-    const expected = String(requestPrompt ?? '').replace(/\r\n/g, '\n').trim()
-    if (!expected) return null
-    const turns = conversationTurns()
-    let userIndex = -1
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      if (turnRole(turns[index]) === 'user' && normalizedTurnText(turns[index]) === expected) {
-        userIndex = index
-        break
-      }
-    }
-    if (userIndex < 0) return null
-    for (let index = userIndex + 1; index < turns.length; index += 1) {
-      const role = turnRole(turns[index])
-      if (role === 'assistant') return turns[index]
-      if (role === 'user') return null
-    }
-    return null
+    const turn = assistantTurns().at(-1)
+    if (!turn) return ''
+    const answer = turn.querySelector('[data-message-content]')
+      ?? turn.querySelector('.markdown')
+      ?? turn.querySelector('.prose')
+      ?? turn.querySelector('[class*="markdown"]')
+      ?? turn
+    return cleanAssistantText(answer.innerText || answer.textContent || '')
   }
 
   function isReady() { return composer() !== null }
@@ -202,9 +167,6 @@
 
   async function observeGeneration(options = {}) {
     const baseline = options.baseline ?? lastSendBaseline
-    const requestPrompt = typeof options.requestPrompt === 'string' && options.requestPrompt.trim() !== ''
-      ? options.requestPrompt
-      : null
     const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : () => {}
     const startTimeoutMs = options.startTimeoutMs ?? 30000
     const completionStabilityMs = options.completionStabilityMs ?? 700
@@ -237,13 +199,12 @@
           return
         }
 
-        const anchoredTurn = requestPrompt === null ? null : assistantTurnAfterPrompt(requestPrompt)
         const count = assistantTurns().length
-        const text = requestPrompt === null ? latestAssistantText() : assistantText(anchoredTurn)
+        const text = latestAssistantText()
         const stopping = stopButton() !== null
-        const newAssistantTurn = requestPrompt === null ? count > baseline.assistantCount : anchoredTurn !== null
+        const changedFromBaseline = count > baseline.assistantCount || (text !== '' && text !== baseline.assistantText)
 
-        if (!started && (stopping || newAssistantTurn)) {
+        if (!started && (stopping || changedFromBaseline)) {
           started = true
           lastChangeAt = now
         }
@@ -252,31 +213,9 @@
           return
         }
 
-        // ChatGPT may briefly mount a new assistant node whose contents are a
-        // clone of the previous answer. That node proves the new turn exists,
-        // but its baseline-identical text is not safe to stream yet. If the
-        // real answer diverges we start streaming then; if generation finishes
-        // with the same text, return it only as the authoritative final value.
-        if (!responseVisible && newAssistantTurn && text === baseline.assistantText) {
-          if (text !== latestRaw) {
-            latestRaw = text
-            lastChangeAt = now
-          }
-          if (!stopping && text !== '' && now - lastChangeAt >= completionStabilityMs) {
-            cleanup()
-            resolve(text)
-            return
-          }
-          if (now >= startDeadline && !stopping && text === '') {
-            fail(new Error('ChatGPT generation started but no new assistant response appeared'))
-          }
-          return
-        }
-
-        // With requestPrompt present, the response is anchored to the assistant
-        // turn following this exact submitted user turn. Remounted older history
-        // therefore cannot become the current response merely by appearing last.
-        if (!responseVisible && newAssistantTurn) {
+        // A Stop button can appear before ChatGPT inserts the new assistant
+        // turn. Do not mistake the previous turn's text for the new response.
+        if (!responseVisible && changedFromBaseline) {
           responseVisible = true
           latestRaw = ''
           accepted = ''
