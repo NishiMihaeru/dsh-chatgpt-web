@@ -148,6 +148,15 @@ test('non-prefix final snapshot is refused because already-streamed text cannot 
   await expectStreamCode(adapter, options(), CHATGPT_WEB_CODES.STREAM_REWRITE)
 })
 
+test('explicit error after ready but before Send stays a retry-safe bridge failure', async () => {
+  const transport = new FakeTransport([
+    { type: 'state', requestId: 'placeholder', stage: 'ready', seq: 0 },
+    { type: 'error', requestId: 'placeholder', code: 'COMPOSER', message: 'composer unavailable', afterSend: false, seq: 1 },
+  ])
+  const adapter = await adapterFor(transport)
+  await expectStreamCode(adapter, options(), CHATGPT_WEB_CODES.BRIDGE)
+})
+
 test('after-send bridge error marks the request uncertain', async () => {
   const transport = new FakeTransport([
     { type: 'state', requestId: 'placeholder', stage: 'sent', seq: 0 },
