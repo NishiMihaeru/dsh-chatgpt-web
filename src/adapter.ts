@@ -158,8 +158,6 @@ export class ChatGptWebAdapter extends LlmAdapter {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const requestId = `req_${randomUUID()}`
         let uncertainBoundary = false
-        let blockStarted = false
-        let streamed = ''
         let conversationUrl = plan.kind === 'continue' ? plan.conversationUrl : undefined
 
         const iterable = this.transport.generate({
@@ -176,7 +174,6 @@ export class ChatGptWebAdapter extends LlmAdapter {
             await this.transport.abort(requestId)
             await this.sessions.markUncertain(sessionId)
             closeIteratorInBackground(iterator)
-            if (blockStarted) yield textBlockEnd(streamed)
             yield abortedFinish()
             return
           }
@@ -191,39 +188,16 @@ export class ChatGptWebAdapter extends LlmAdapter {
               conversationUrl = event.conversationUrl
               break
             case 'delta':
-              if (event.text.length === 0) break
-              if (!blockStarted) {
-                blockStarted = true
-                yield { type: 'block-start', index: 0, blockType: 'text' }
-              }
-              streamed += event.text
-              yield { type: 'text-delta', index: 0, text: event.text }
+              // Browser DOM snapshots are not a trustworthy append-only stream.
+              // Keep them internal and publish only the authoritative completion.
               break
             case 'complete': {
               const finalText = event.text
-              if (!finalText.startsWith(streamed)) {
-                if (blockStarted) yield textBlockEnd(streamed)
-                await this.sessions.markUncertain(sessionId)
-                throw new LlmError(
-                  'ChatGPT Web rewrote already-streamed assistant text; refusing to commit divergent history',
-                  CHATGPT_WEB_CODES.STREAM_REWRITE,
-                )
-              }
-              const suffix = finalText.slice(streamed.length)
-              if (suffix.length > 0) {
-                if (!blockStarted) {
-                  blockStarted = true
-                  yield { type: 'block-start', index: 0, blockType: 'text' }
-                }
-                streamed += suffix
-                yield { type: 'text-delta', index: 0, text: suffix }
-              }
               if (finalText.length === 0) {
                 await this.sessions.markUncertain(sessionId)
                 throw new LlmError('ChatGPT Web produced an empty assistant response', 'EMPTY_RESPONSE')
               }
               if (conversationUrl === undefined) {
-                if (blockStarted) yield textBlockEnd(finalText)
                 await this.sessions.markUncertain(sessionId)
                 throw new LlmError(
                   'ChatGPT Web completed a new conversation without reporting its managed URL',
@@ -232,13 +206,14 @@ export class ChatGptWebAdapter extends LlmAdapter {
               }
 
               await this.sessions.commitSuccess(sessionId, options.system, options.messages, conversationUrl, finalText)
-              if (blockStarted) yield textBlockEnd(finalText)
+              yield { type: 'block-start', index: 0, blockType: 'text' }
+              yield { type: 'text-delta', index: 0, text: finalText }
+              yield textBlockEnd(finalText)
               yield { type: 'finish', reason: { kind: 'stop' } }
               return
             }
             case 'aborted':
               await this.sessions.markUncertain(sessionId)
-              if (blockStarted) yield textBlockEnd(streamed)
               yield abortedFinish()
               return
             case 'error':
@@ -248,14 +223,12 @@ export class ChatGptWebAdapter extends LlmAdapter {
                 && !uncertainBoundary
                 && plan.kind === 'continue'
                 && attempt === 0
-                && !blockStarted
               ) {
                 closeIteratorInBackground(iterator)
                 await this.sessions.reset(sessionId)
                 plan = await this.sessions.plan(sessionId, options.system, options.messages)
                 continue attemptLoop
               }
-              if (blockStarted) yield textBlockEnd(streamed)
               if (event.afterSend || uncertainBoundary) {
                 await this.sessions.markUncertain(sessionId)
                 throw new LlmError(
@@ -270,7 +243,6 @@ export class ChatGptWebAdapter extends LlmAdapter {
           }
         }
 
-        if (blockStarted) yield textBlockEnd(streamed)
         if (uncertainBoundary) await this.sessions.markUncertain(sessionId)
         throw new LlmError(
           'ChatGPT Web bridge ended before generation completed',
