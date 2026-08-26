@@ -193,7 +193,7 @@ export class BridgeServer {
 
         switch (message.type) {
           case 'request-state':
-            if (message.stage === 'ready' || message.stage === 'sent' || message.stage === 'generating') pending.afterSend = true
+            if (message.stage === 'sent' || message.stage === 'generating') pending.afterSend = true
             pending.stream.push({ type: 'state', requestId: message.requestId, stage: message.stage, seq: message.seq })
             break
           case 'session-ready':
