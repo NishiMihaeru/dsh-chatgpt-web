@@ -76,7 +76,8 @@ test('current documentation uses authoritative-completion-only v0.1 semantics', 
 
   assert.match(readme, /work in progress/i)
   assert.match(readme, /browser `delta` events are \*\*internal transport observations only\*\*/i)
-  assert.match(design, /There are no separate `open-session`, `reset-session`, or `generation-start` wire messages/i)
+  assert.match(design, /`open-session` and `reset-session` are \*\*not\*\* separate wire messages/i)
+  assert.match(design, /There is no separate `generation-start` wire event/i)
   assert.match(plan, /browser deltas are no longer DSH text deltas/i)
   assert.match(smoke, /Do not expect token-by-token DSH streaming in v0\.1/i)
 
