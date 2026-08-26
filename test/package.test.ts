@@ -85,13 +85,18 @@ test('current documentation uses authoritative-completion-only v0.1 semantics', 
   assert.doesNotMatch(smoke, /verify clean native DSH streaming/i)
 })
 
-test('current documentation records the unresolved premature-completion release blocker', () => {
+test('current documentation records the resolved premature-completion blocker and remaining packed-install gate', () => {
   for (const document of [readme, design, plan, smoke]) {
     assert.match(document, /premature/i)
     assert.match(document, /completion/i)
+    assert.match(document, /resolved/i)
   }
-  assert.match(readme, /not release-ready/i)
-  assert.match(design, /must not be released yet/i)
-  assert.match(plan, /release acceptance is blocked/i)
-  assert.match(smoke, /Do not mark v0\.1 accepted yet/i)
+
+  assert.match(readme, /packed-install/i)
+  assert.match(plan, /packed-install/i)
+  assert.match(smoke, /packed-install/i)
+  assert.doesNotMatch(readme, /current live blocker/i)
+  assert.doesNotMatch(design, /Current open blocker: premature completion/i)
+  assert.doesNotMatch(plan, /release acceptance is blocked by premature browser completion detection/i)
+  assert.doesNotMatch(smoke, /Do not mark v0\.1 accepted yet/i)
 })
