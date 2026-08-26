@@ -10,6 +10,18 @@ function user(text: string): Message {
   return createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] })
 }
 
+function runtimeContext(text: string): Message {
+  return createUserMessage({
+    source: {
+      kind: 'plugin',
+      plugin: '@deepseek-ai/dsh-system-prompt',
+      form: 'snapshot',
+      sections: [{ name: 'runtime', text }],
+    },
+    content: [{ type: 'text', text }],
+  })
+}
+
 function assistant(text: string): Message {
   return createAssistantMessage({ source: { provider: 'chatgpt-web', model: 'auto' }, content: [{ type: 'text', text }] })
 }
@@ -42,6 +54,23 @@ test('new session uses full context and successful state survives restart', asyn
     assert.match(continued.prompt, /again/)
     assert.doesNotMatch(continued.prompt, /world/)
   }
+})
+
+test('runtime context after the human turn stays context and does not become the response target', async () => {
+  const { statePath } = await tempState()
+  const manager = new SessionManager(statePath)
+  const snapshot = 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.'
+  const planned = await manager.plan('s1', 'system', [
+    user('Ответь одним словом: первый'),
+    runtimeContext(snapshot),
+  ])
+
+  assert.equal(planned.kind, 'new')
+  assert.match(planned.prompt, /Ответь одним словом: первый/)
+  assert.match(planned.prompt, /Current runtime context/)
+  assert.match(planned.prompt, /Respond to DSH message 1, the newest human-authored user message/)
+  assert.match(planned.prompt, /later user-role plugin or tool messages are context/i)
+  assert.doesNotMatch(planned.prompt, /Respond only to the newest DSH user turn\./)
 })
 
 test('untrusted history or uncertain state forces rehydration', async () => {
