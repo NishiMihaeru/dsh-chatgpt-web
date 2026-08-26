@@ -87,10 +87,6 @@ function abortedFinish(message = 'ChatGPT Web generation was aborted'): StreamCh
   }
 }
 
-function preview(text: string): string {
-  return JSON.stringify(text.length > 160 ? `${text.slice(0, 160)}…` : text)
-}
-
 async function nextEvent(
   iterator: AsyncIterator<TransportEvent>,
   signal: AbortSignal | undefined,
@@ -209,7 +205,7 @@ export class ChatGptWebAdapter extends LlmAdapter {
                 if (blockStarted) yield textBlockEnd(streamed)
                 await this.sessions.markUncertain(sessionId)
                 throw new LlmError(
-                  `ChatGPT Web rewrote already-streamed assistant text; streamed=${preview(streamed)} (${streamed.length} chars), final=${preview(finalText)} (${finalText.length} chars)`,
+                  'ChatGPT Web rewrote already-streamed assistant text; refusing to commit divergent history',
                   CHATGPT_WEB_CODES.STREAM_REWRITE,
                 )
               }
