@@ -106,3 +106,26 @@ test('empty ChatGPT completion fails with canonical EMPTY_RESPONSE and invalidat
   assert.equal((error as { code?: unknown }).code, 'EMPTY_RESPONSE')
   assert.equal((await sessions.get('terminal-test'))?.status, 'uncertain')
 })
+
+test('unstable browser deltas stay internal and authoritative completion is the only DSH text', async () => {
+  const transport: ChatTransport = {
+    async *generate(req): AsyncIterable<TransportEvent> {
+      yield { type: 'state', requestId: req.requestId, stage: 'sent', seq: 0 }
+      yield { type: 'session-ready', requestId: req.requestId, conversationUrl: 'https://chatgpt.com/c/rewrite', seq: 1 }
+      yield { type: 'delta', requestId: req.requestId, text: 'первый', seq: 2 }
+      yield { type: 'complete', requestId: req.requestId, text: 'второй', seq: 3 }
+    },
+    async abort() {},
+    async dispose() {},
+  }
+  const { adapter } = await makeAdapter(transport)
+  const chunks: StreamChunk[] = []
+  for await (const chunk of adapter.stream(request())) chunks.push(chunk)
+
+  assert.deepEqual(chunks, [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    { type: 'text-delta', index: 0, text: 'второй' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: 'второй' } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+})
