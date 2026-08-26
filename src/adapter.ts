@@ -179,10 +179,10 @@ export class ChatGptWebAdapter extends LlmAdapter {
         const event = next.value
         switch (event.type) {
           case 'state':
-            // `ready` is the conservative uncertainty boundary: immediately
-            // afterwards the extension may cross Send even if the next state is
-            // lost with the WebSocket connection.
-            if (event.stage === 'ready' || event.stage === 'sent' || event.stage === 'generating') uncertainBoundary = true
+            // `ready` is still pre-Send. Silent disconnects after generate
+            // dispatch are marked uncertain by BridgeServer itself, while an
+            // explicit browser error before `sent` remains retry-safe.
+            if (event.stage === 'sent' || event.stage === 'generating') uncertainBoundary = true
             break
           case 'session-ready':
             conversationUrl = event.conversationUrl
