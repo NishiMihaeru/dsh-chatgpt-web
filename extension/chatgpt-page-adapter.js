@@ -202,9 +202,9 @@
         const count = assistantTurns().length
         const text = latestAssistantText()
         const stopping = stopButton() !== null
-        const changedFromBaseline = count > baseline.assistantCount || (text !== '' && text !== baseline.assistantText)
+        const newAssistantTurn = count > baseline.assistantCount
 
-        if (!started && (stopping || changedFromBaseline)) {
+        if (!started && (stopping || newAssistantTurn)) {
           started = true
           lastChangeAt = now
         }
@@ -213,9 +213,10 @@
           return
         }
 
-        // A Stop button can appear before ChatGPT inserts the new assistant
-        // turn. Do not mistake the previous turn's text for the new response.
-        if (!responseVisible && changedFromBaseline) {
+        // ChatGPT may mutate controls or even the previous assistant turn while
+        // preparing a continuation. Only a newly inserted assistant turn belongs
+        // to this request and is safe to stream.
+        if (!responseVisible && newAssistantTurn) {
           responseVisible = true
           latestRaw = ''
           accepted = ''
