@@ -1,0 +1,3 @@
+- insert:
+    - id: llm-chatgpt-web
+      name: dsh-chatgpt-web
