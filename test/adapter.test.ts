@@ -131,7 +131,7 @@ test('image input fails with the dedicated unsupported-image code', async () => 
   await expectStreamCode(adapter, options({ messages: [imageMessage] }), 'CHATGPT_WEB_UNSUPPORTED_IMAGE')
 })
 
-test('stream emits append-only deltas and authoritative final block', async () => {
+test('browser deltas stay internal and authoritative completion is the only DSH text', async () => {
   const transport = new FakeTransport([
     { type: 'state', requestId: 'placeholder', stage: 'sent', seq: 0 },
     { type: 'session-ready', requestId: 'placeholder', conversationUrl: 'https://chatgpt.com/c/a', seq: 1 },
@@ -142,14 +142,13 @@ test('stream emits append-only deltas and authoritative final block', async () =
   const chunks = await collect(adapter, options())
   assert.deepEqual(chunks, [
     { type: 'block-start', index: 0, blockType: 'text' },
-    { type: 'text-delta', index: 0, text: 'hel' },
-    { type: 'text-delta', index: 0, text: 'lo' },
+    { type: 'text-delta', index: 0, text: 'hello' },
     { type: 'block-end', index: 0, block: { type: 'text', text: 'hello' } },
     { type: 'finish', reason: { kind: 'stop' } },
   ])
 })
 
-test('non-prefix final snapshot is refused because already-streamed text cannot be rewritten', async () => {
+test('non-prefix browser delta cannot rewrite the authoritative completion', async () => {
   const transport = new FakeTransport([
     { type: 'state', requestId: 'placeholder', stage: 'sent', seq: 0 },
     { type: 'session-ready', requestId: 'placeholder', conversationUrl: 'https://chatgpt.com/c/a', seq: 1 },
@@ -157,7 +156,13 @@ test('non-prefix final snapshot is refused because already-streamed text cannot 
     { type: 'complete', requestId: 'placeholder', text: 'axc', seq: 3 },
   ])
   const adapter = await adapterFor(transport)
-  await expectStreamCode(adapter, options(), CHATGPT_WEB_CODES.STREAM_REWRITE)
+  const chunks = await collect(adapter, options())
+  assert.deepEqual(chunks, [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    { type: 'text-delta', index: 0, text: 'axc' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: 'axc' } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
 })
 
 test('explicit error after ready but before Send stays a retry-safe bridge failure', async () => {
